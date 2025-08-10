@@ -44,12 +44,14 @@ A complete mono-repository setup using Nx with modern DevOps tooling.
 ### Installation
 
 1. **Clone the repository**
+
    ```bash
    git clone <repository-url>
    cd nx-mono-repo
    ```
 
 2. **Install dependencies**
+
    ```bash
    npm install
    ```
@@ -62,6 +64,7 @@ A complete mono-repository setup using Nx with modern DevOps tooling.
 ## 📝 Available Commands
 
 ### Development
+
 ```bash
 npm start                    # Start development server
 npm run build               # Build all projects
@@ -71,6 +74,7 @@ npm run format              # Format code with Prettier
 ```
 
 ### Docker
+
 ```bash
 npm run docker:build       # Build Docker images
 npm run docker:up          # Start all services
@@ -78,6 +82,7 @@ npm run docker:down        # Stop all services
 ```
 
 ### Nx Commands
+
 ```bash
 nx build <project-name>     # Build specific project
 nx test <project-name>      # Test specific project
@@ -90,16 +95,19 @@ nx dep-graph               # View dependency graph
 ## 🔧 Adding New Projects
 
 ### Create a new React app
+
 ```bash
 nx generate @nx/react:app my-new-app
 ```
 
 ### Create a new library
+
 ```bash
 nx generate @nx/react:lib my-new-lib
 ```
 
 ### Create a new Node.js app
+
 ```bash
 nx generate @nx/node:app my-api
 ```
@@ -116,6 +124,7 @@ The project includes a complete Docker setup:
   - Nginx reverse proxy
 
 Start the development environment:
+
 ```bash
 docker-compose up -d
 ```

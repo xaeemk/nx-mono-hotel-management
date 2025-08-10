@@ -1,9 +1,6 @@
 {
   "$schema": "./node_modules/nx/schemas/nx-schema.json",
   "npmScope": "nx-mono-repo",
-  "affected": {
-    "defaultBase": "origin/main"
-  },
   "implicitDependencies": {
     "package.json": {
       "dependencies": "*",
