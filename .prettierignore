@@ -41,3 +41,7 @@ helm/
 
 # Kubernetes manifests with template placeholders
 k8s/
+
+# Generated static files
+static/
+project-graph*.html

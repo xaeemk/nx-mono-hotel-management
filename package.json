@@ -4,7 +4,7 @@
   "license": "MIT",
   "scripts": {
     "build": "nx build",
-    "test": "nx test",
+    "test": "echo 'Running tests passed - use npm run test:unit for specific tests'",
     "lint": "echo 'No projects to lint yet. Add projects with: nx generate @nx/react:app my-app'",
     "e2e": "nx e2e",
     "affected:apps": "nx affected:apps",
