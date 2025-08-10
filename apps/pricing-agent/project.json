@@ -1,0 +1,46 @@
+{
+  "name": "pricing-agent",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/pricing-agent/src",
+  "projectType": "application",
+  "targets": {
+    "build": {
+      "executor": "@nx/node:build",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/apps/pricing-agent",
+        "main": "apps/pricing-agent/src/main.ts",
+        "tsConfig": "apps/pricing-agent/tsconfig.app.json",
+        "assets": ["apps/pricing-agent/src/assets"]
+      },
+      "configurations": {
+        "production": {
+          "optimization": true,
+          "extractLicenses": true,
+          "inspect": false,
+          "fileReplacements": [
+            {
+              "replace": "apps/pricing-agent/src/environments/environment.ts",
+              "with": "apps/pricing-agent/src/environments/environment.prod.ts"
+            }
+          ]
+        }
+      }
+    },
+    "serve": {
+      "executor": "@nx/node:execute",
+      "options": {
+        "buildTarget": "pricing-agent:build"
+      }
+    },
+    "test": {
+      "executor": "@nx/jest:jest",
+      "outputs": ["{workspaceRoot}/coverage/apps/pricing-agent"],
+      "options": {
+        "jestConfig": "apps/pricing-agent/jest.config.ts",
+        "passWithNoTests": true
+      }
+    }
+  },
+  "tags": ["type:app", "scope:pricing"]
+}

@@ -1,0 +1,333 @@
+version: '3.8'
+
+services:
+  # Phase 4: Voice & Analytics Services
+  voice-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: voice-service
+    container_name: hotel-voice-service
+    ports:
+      - '3006:3006'
+    environment:
+      - NODE_ENV=production
+      - VOICE_SERVICE_PORT=3006
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/nx_mono_repo
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_VOICE_DB=8
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+      - TWILIO_WEBHOOK_URL=https://yourdomain.com/api/v1/twilio/voice
+      - TWILIO_VOICE_NUMBER=${TWILIO_VOICE_NUMBER}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=gpt-4
+      - WHISPER_MODEL=whisper-1
+      - TTS_MODEL=tts-1
+      - TTS_VOICE=nova
+      - MCP_HUB_URL=http://mcp-hub:8080
+      - AUDIO_STORAGE_PATH=/app/audio
+      - MAX_AUDIO_FILE_SIZE=50000000
+      - NOTIFICATION_SERVICE_URL=http://notification-service:3007
+      - RESERVATION_SERVICE_URL=http://reservation-service:3001
+    volumes:
+      - voice_audio_storage:/app/audio
+    depends_on:
+      - postgres
+      - redis
+      - mcp-hub
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:3006/api/v1/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - hotel-network
+
+  bi-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: bi-service
+    container_name: hotel-bi-service
+    ports:
+      - '3007:3007'
+    environment:
+      - NODE_ENV=production
+      - BI_SERVICE_PORT=3007
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/nx_mono_repo
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_BI_DB=9
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+      - METABASE_URL=http://metabase:3000
+      - METABASE_USERNAME=${METABASE_USERNAME}
+      - METABASE_PASSWORD=${METABASE_PASSWORD}
+      - DAILY_DIGEST_ENABLED=true
+      - DAILY_DIGEST_TIME=08:00
+      - DAILY_DIGEST_RECIPIENTS=${DAILY_DIGEST_RECIPIENTS}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+    depends_on:
+      - postgres
+      - redis
+      - metabase
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:3007/api/v1/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - hotel-network
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: notification-service
+    container_name: hotel-notification-service
+    ports:
+      - '3008:3008'
+    environment:
+      - NODE_ENV=production
+      - NOTIFICATION_SERVICE_PORT=3008
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/nx_mono_repo
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_NOTIFICATION_DB=10
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+      - TWILIO_SMS_NUMBER=${TWILIO_SMS_NUMBER}
+      - TWILIO_WHATSAPP_NUMBER=${TWILIO_WHATSAPP_NUMBER}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - TTS_MODEL=tts-1
+      - TTS_VOICE=nova
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:3008/api/v1/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - hotel-network
+
+  # Enhanced MCP Hub for Phase 4
+  mcp-hub:
+    build:
+      context: ./infrastructure/mcp-hub
+      dockerfile: Dockerfile
+    container_name: hotel-mcp-hub
+    ports:
+      - '8080:8080'
+    environment:
+      - NODE_ENV=production
+      - PORT=8080
+      - REDIS_URL=redis://redis:6379
+      - POSTGRES_URL=postgresql://postgres:postgres@postgres:5432/nx_mono_repo
+      - LOKI_ENDPOINT=http://loki:3100
+    depends_on:
+      - postgres
+      - redis
+      - loki
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8080/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - hotel-network
+
+  # Metabase for BI Dashboards
+  metabase:
+    image: metabase/metabase:v0.47.7
+    container_name: hotel-metabase
+    ports:
+      - '3000:3000'
+    environment:
+      - MB_DB_TYPE=postgres
+      - MB_DB_DBNAME=metabase
+      - MB_DB_PORT=5432
+      - MB_DB_USER=postgres
+      - MB_DB_PASS=postgres
+      - MB_DB_HOST=postgres
+      - MB_EMAIL_SMTP_HOST=${SMTP_HOST}
+      - MB_EMAIL_SMTP_PORT=${SMTP_PORT}
+      - MB_EMAIL_SMTP_USERNAME=${SMTP_USER}
+      - MB_EMAIL_SMTP_PASSWORD=${SMTP_PASS}
+      - MB_EMAIL_FROM_ADDRESS=${SMTP_USER}
+      - JAVA_OPTS=-Xmx2g
+    volumes:
+      - metabase_data:/metabase-data
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:3000/api/health']
+      interval: 60s
+      timeout: 30s
+      retries: 3
+    networks:
+      - hotel-network
+
+  # n8n for Workflow Automation
+  n8n:
+    image: n8nio/n8n:1.19.4
+    container_name: hotel-n8n
+    ports:
+      - '5678:5678'
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=n8n
+      - DB_POSTGRESDB_USER=postgres
+      - DB_POSTGRESDB_PASSWORD=postgres
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_USERNAME:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD:-admin123}
+      - N8N_HOST=${N8N_HOST:-localhost}
+      - N8N_PROTOCOL=http
+      - N8N_PORT=5678
+      - WEBHOOK_URL=http://${N8N_HOST:-localhost}:5678/
+      # Environment variables for workflows
+      - VOICE_SERVICE_URL=http://voice-service:3006
+      - BI_SERVICE_URL=http://bi-service:3007
+      - NOTIFICATION_SERVICE_URL=http://notification-service:3008
+      - RESERVATION_SERVICE_URL=http://reservation-service:3001
+      - PRICING_SERVICE_URL=http://pricing-agent:3002
+      - POSTGRES_CREDENTIAL_ID=postgres-main
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - BOOKING_URL=${BOOKING_URL:-https://yourdomain.com/book}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./workflows/n8n:/home/node/.n8n/workflows
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:5678/healthz']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - hotel-network
+
+  # Existing core services
+  postgres:
+    image: postgres:15-alpine
+    container_name: hotel-postgres
+    ports:
+      - '5432:5432'
+    environment:
+      - POSTGRES_DB=nx_mono_repo
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - hotel-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: hotel-redis
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - hotel-network
+
+  # Monitoring & Logging
+  loki:
+    image: grafana/loki:2.9.2
+    container_name: hotel-loki
+    ports:
+      - '3100:3100'
+    volumes:
+      - loki_data:/loki
+      - ./infrastructure/loki/loki-config.yml:/etc/loki/local-config.yaml
+    command: -config.file=/etc/loki/local-config.yaml
+    restart: unless-stopped
+    networks:
+      - hotel-network
+
+  grafana:
+    image: grafana/grafana:10.1.5
+    container_name: hotel-grafana
+    ports:
+      - '3001:3000'
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin123}
+      - GF_SMTP_ENABLED=true
+      - GF_SMTP_HOST=${SMTP_HOST}:${SMTP_PORT}
+      - GF_SMTP_USER=${SMTP_USER}
+      - GF_SMTP_PASSWORD=${SMTP_PASS}
+      - GF_SMTP_FROM_ADDRESS=${SMTP_USER}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - loki
+    restart: unless-stopped
+    networks:
+      - hotel-network
+
+  # Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: hotel-nginx
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./infrastructure/nginx/ssl:/etc/nginx/ssl
+    depends_on:
+      - voice-service
+      - bi-service
+      - notification-service
+      - metabase
+      - n8n
+      - grafana
+    restart: unless-stopped
+    networks:
+      - hotel-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  metabase_data:
+  n8n_data:
+  grafana_data:
+  loki_data:
+  voice_audio_storage:
+
+networks:
+  hotel-network:
+    driver: bridge

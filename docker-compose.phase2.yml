@@ -1,0 +1,178 @@
+version: '3.8'
+
+services:
+  # Infrastructure Services
+  redis:
+    image: redis:7-alpine
+    container_name: hotel-redis
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - hotel-network
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: hotel-postgres
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_DB: hotel_db
+      POSTGRES_USER: hotel_user
+      POSTGRES_PASSWORD: hotel_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - hotel-network
+
+  mqtt:
+    image: eclipse-mosquitto:2
+    container_name: hotel-mqtt
+    ports:
+      - '1883:1883'
+      - '9001:9001'
+    volumes:
+      - ./infrastructure/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mqtt-data:/mosquitto/data
+      - mqtt-logs:/mosquitto/log
+    networks:
+      - hotel-network
+
+  # Phase 2 Services
+  checkin-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: checkin-service
+    container_name: hotel-checkin-service
+    ports:
+      - '3003:3003'
+    environment:
+      - NODE_ENV=production
+      - CHECKIN_SERVICE_PORT=3003
+      - DATABASE_URL=postgresql://hotel_user:hotel_password@postgres:5432/hotel_db
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_CHECKIN_DB=2
+      - REDIS_QR_DB=3
+      - REDIS_OTP_DB=4
+      - CHECKIN_SECRET=your-secret-key-here
+      - SMTP_HOST=smtp.gmail.com
+      - SMTP_PORT=587
+      - SMTP_USER=your-email@gmail.com
+      - SMTP_PASS=your-app-password
+      - FRONTEND_URL=http://localhost:3000
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - hotel-network
+    volumes:
+      - ./logs:/app/logs
+
+  housekeeping-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: housekeeping-service
+    container_name: hotel-housekeeping-service
+    ports:
+      - '3004:3004'
+    environment:
+      - NODE_ENV=production
+      - HOUSEKEEPING_SERVICE_PORT=3004
+      - DATABASE_URL=postgresql://hotel_user:hotel_password@postgres:5432/hotel_db
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_HOUSEKEEPING_DB=5
+      - MQTT_URL=mqtt://mqtt:1883
+      - MQTT_USERNAME=hotel_service
+      - MQTT_PASSWORD=mqtt_password
+    depends_on:
+      - postgres
+      - redis
+      - mqtt
+    networks:
+      - hotel-network
+    volumes:
+      - ./logs:/app/logs
+
+  allocation-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: allocation-service
+    container_name: hotel-allocation-service
+    ports:
+      - '3005:3005'
+    environment:
+      - NODE_ENV=production
+      - ALLOCATION_SERVICE_PORT=3005
+      - DATABASE_URL=postgresql://hotel_user:hotel_password@postgres:5432/hotel_db
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_ALLOCATION_DB=7
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - hotel-network
+    volumes:
+      - ./logs:/app/logs
+
+  # Existing Services (from Phase 1)
+  api-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api-gateway
+    container_name: hotel-api-gateway
+    ports:
+      - '3001:3001'
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - DATABASE_URL=postgresql://hotel_user:hotel_password@postgres:5432/hotel_db
+      - JWT_SECRET=your-jwt-secret-here
+      - CHECKIN_SERVICE_URL=http://checkin-service:3003
+      - HOUSEKEEPING_SERVICE_URL=http://housekeeping-service:3004
+      - ALLOCATION_SERVICE_URL=http://allocation-service:3005
+    depends_on:
+      - postgres
+      - checkin-service
+      - housekeeping-service
+      - allocation-service
+    networks:
+      - hotel-network
+
+  # Monitoring and Management
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: hotel-redis-commander
+    ports:
+      - '8081:8081'
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    depends_on:
+      - redis
+    networks:
+      - hotel-network
+
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+  mqtt-data:
+    driver: local
+  mqtt-logs:
+    driver: local
+
+networks:
+  hotel-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

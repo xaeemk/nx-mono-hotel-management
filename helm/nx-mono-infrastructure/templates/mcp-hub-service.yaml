@@ -1,0 +1,20 @@
+{{- if .Values.mcpHub.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nx-mono-infrastructure.fullname" . }}-mcp-hub
+  labels:
+    {{- include "nx-mono-infrastructure.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-hub
+spec:
+  type: {{ .Values.mcpHub.service.type }}
+  ports:
+    - port: {{ .Values.mcpHub.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "nx-mono-infrastructure.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-hub
+{{- end }}

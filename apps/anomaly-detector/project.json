@@ -1,0 +1,46 @@
+{
+  "name": "anomaly-detector",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/anomaly-detector/src",
+  "projectType": "application",
+  "targets": {
+    "build": {
+      "executor": "@nx/node:build",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/apps/anomaly-detector",
+        "main": "apps/anomaly-detector/src/main.ts",
+        "tsConfig": "apps/anomaly-detector/tsconfig.app.json",
+        "assets": ["apps/anomaly-detector/src/assets"]
+      },
+      "configurations": {
+        "production": {
+          "optimization": true,
+          "extractLicenses": true,
+          "inspect": false,
+          "fileReplacements": [
+            {
+              "replace": "apps/anomaly-detector/src/environments/environment.ts",
+              "with": "apps/anomaly-detector/src/environments/environment.prod.ts"
+            }
+          ]
+        }
+      }
+    },
+    "serve": {
+      "executor": "@nx/node:execute",
+      "options": {
+        "buildTarget": "anomaly-detector:build"
+      }
+    },
+    "test": {
+      "executor": "@nx/jest:jest",
+      "outputs": ["{workspaceRoot}/coverage/apps/anomaly-detector"],
+      "options": {
+        "jestConfig": "apps/anomaly-detector/jest.config.ts",
+        "passWithNoTests": true
+      }
+    }
+  },
+  "tags": ["type:app", "scope:anomaly-detection"]
+}

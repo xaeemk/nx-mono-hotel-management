@@ -1,0 +1,226 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: postgres-backup
+  annotations:
+    eks.amazonaws.com/role-arn: '{{BACKUP_ROLE_ARN}}'
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: postgres-backup
+rules:
+  - apiGroups: ['']
+    resources: ['secrets']
+    verbs: ['get', 'list']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: postgres-backup
+subjects:
+  - kind: ServiceAccount
+    name: postgres-backup
+roleRef:
+  kind: Role
+  name: postgres-backup
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  labels:
+    app: postgres-backup
+spec:
+  schedule: '0 2 * * *' # Daily at 2 AM UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: postgres-backup
+        spec:
+          serviceAccountName: postgres-backup
+          restartPolicy: OnFailure
+          containers:
+            - name: postgres-backup
+              image: postgres:15-alpine
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+
+                  # Install AWS CLI
+                  apk add --no-cache aws-cli gzip
+
+                  # Set backup filename with timestamp
+                  BACKUP_FILENAME="postgres-backup-$(date +%Y%m%d-%H%M%S).sql.gz"
+
+                  # Create backup
+                  echo "Starting PostgreSQL backup..."
+                  PGPASSWORD="$DATABASE_PASSWORD" pg_dump \
+                    -h "$DATABASE_HOST" \
+                    -U "$DATABASE_USER" \
+                    -d "$DATABASE_NAME" \
+                    --no-password \
+                    --verbose \
+                    | gzip > "/tmp/$BACKUP_FILENAME"
+
+                  # Upload to S3
+                  echo "Uploading backup to S3..."
+                  aws s3 cp "/tmp/$BACKUP_FILENAME" "s3://$BACKUP_BUCKET/postgres/$BACKUP_FILENAME"
+
+                  # Verify upload
+                  aws s3 ls "s3://$BACKUP_BUCKET/postgres/$BACKUP_FILENAME"
+
+                  echo "Backup completed successfully: $BACKUP_FILENAME"
+
+                  # Clean up old backups (keep last 30 days)
+                  echo "Cleaning up old backups..."
+                  aws s3 ls "s3://$BACKUP_BUCKET/postgres/" --recursive | \
+                    grep "postgres-backup-" | \
+                    sort -k1,2 | \
+                    head -n -30 | \
+                    while read -r line; do
+                      old_backup=$(echo "$line" | awk '{print $4}')
+                      if [ ! -z "$old_backup" ]; then
+                        echo "Deleting old backup: $old_backup"
+                        aws s3 rm "s3://$BACKUP_BUCKET/$old_backup"
+                      fi
+                    done
+
+                  echo "Backup and cleanup completed successfully"
+              env:
+                - name: DATABASE_HOST
+                  valueFrom:
+                    secretKeyRef:
+                      name: database-secret
+                      key: host
+                - name: DATABASE_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: database-secret
+                      key: username
+                - name: DATABASE_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: database-secret
+                      key: password
+                - name: DATABASE_NAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: database-secret
+                      key: database
+                - name: BACKUP_BUCKET
+                  value: '{{BACKUP_BUCKET}}'
+                - name: AWS_REGION
+                  value: '{{AWS_REGION}}'
+              resources:
+                requests:
+                  memory: '256Mi'
+                  cpu: '100m'
+                limits:
+                  memory: '512Mi'
+                  cpu: '500m'
+              securityContext:
+                allowPrivilegeEscalation: false
+                runAsNonRoot: true
+                runAsUser: 999
+                capabilities:
+                  drop:
+                    - ALL
+---
+# Manual backup job template
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: postgres-backup-manual
+  labels:
+    app: postgres-backup
+    type: manual
+spec:
+  template:
+    metadata:
+      labels:
+        app: postgres-backup
+        type: manual
+    spec:
+      serviceAccountName: postgres-backup
+      restartPolicy: Never
+      containers:
+        - name: postgres-backup
+          image: postgres:15-alpine
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+
+              # Install AWS CLI
+              apk add --no-cache aws-cli gzip
+
+              # Set backup filename with timestamp and manual flag
+              BACKUP_FILENAME="postgres-backup-manual-$(date +%Y%m%d-%H%M%S).sql.gz"
+
+              # Create backup
+              echo "Starting manual PostgreSQL backup..."
+              PGPASSWORD="$DATABASE_PASSWORD" pg_dump \
+                -h "$DATABASE_HOST" \
+                -U "$DATABASE_USER" \
+                -d "$DATABASE_NAME" \
+                --no-password \
+                --verbose \
+                | gzip > "/tmp/$BACKUP_FILENAME"
+
+              # Upload to S3
+              echo "Uploading backup to S3..."
+              aws s3 cp "/tmp/$BACKUP_FILENAME" "s3://$BACKUP_BUCKET/postgres/manual/$BACKUP_FILENAME"
+
+              # Verify upload
+              aws s3 ls "s3://$BACKUP_BUCKET/postgres/manual/$BACKUP_FILENAME"
+
+              echo "Manual backup completed successfully: $BACKUP_FILENAME"
+          env:
+            - name: DATABASE_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: database-secret
+                  key: host
+            - name: DATABASE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: database-secret
+                  key: username
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: database-secret
+                  key: password
+            - name: DATABASE_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: database-secret
+                  key: database
+            - name: BACKUP_BUCKET
+              value: '{{BACKUP_BUCKET}}'
+            - name: AWS_REGION
+              value: '{{AWS_REGION}}'
+          resources:
+            requests:
+              memory: '256Mi'
+              cpu: '100m'
+            limits:
+              memory: '512Mi'
+              cpu: '500m'
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 999
+            capabilities:
+              drop:
+                - ALL

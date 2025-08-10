@@ -1,0 +1,115 @@
+{{- if .Values.jaeger.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nx-mono-infrastructure.fullname" . }}-jaeger
+  labels:
+    {{- include "nx-mono-infrastructure.labels" . | nindent 4 }}
+    app.kubernetes.io/component: jaeger
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "nx-mono-infrastructure.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: jaeger
+  template:
+    metadata:
+      labels:
+        {{- include "nx-mono-infrastructure.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: jaeger
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: jaeger
+          image: "{{ .Values.jaeger.image.repository }}:{{ .Values.jaeger.image.tag }}"
+          imagePullPolicy: {{ .Values.jaeger.image.pullPolicy }}
+          ports:
+            - name: ui
+              containerPort: {{ .Values.jaeger.service.ports.ui }}
+              protocol: TCP
+            - name: collector-http
+              containerPort: {{ .Values.jaeger.service.ports.collector_http }}
+              protocol: TCP
+            - name: collector-grpc
+              containerPort: {{ .Values.jaeger.service.ports.collector_grpc }}
+              protocol: TCP
+            - name: agent-compact
+              containerPort: {{ .Values.jaeger.service.ports.agent_compact }}
+              protocol: UDP
+            - name: agent-binary
+              containerPort: {{ .Values.jaeger.service.ports.agent_binary }}
+              protocol: UDP
+          env:
+            - name: COLLECTOR_OTLP_ENABLED
+              value: {{ .Values.jaeger.env.COLLECTOR_OTLP_ENABLED }}
+            - name: LOG_LEVEL
+              value: {{ .Values.jaeger.env.LOG_LEVEL }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: ui
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: ui
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.jaeger.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nx-mono-infrastructure.fullname" . }}-jaeger
+  labels:
+    {{- include "nx-mono-infrastructure.labels" . | nindent 4 }}
+    app.kubernetes.io/component: jaeger
+spec:
+  type: {{ .Values.jaeger.service.type }}
+  ports:
+    - port: {{ .Values.jaeger.service.ports.ui }}
+      targetPort: ui
+      protocol: TCP
+      name: ui
+    - port: {{ .Values.jaeger.service.ports.collector_http }}
+      targetPort: collector-http
+      protocol: TCP
+      name: collector-http
+    - port: {{ .Values.jaeger.service.ports.collector_grpc }}
+      targetPort: collector-grpc
+      protocol: TCP
+      name: collector-grpc
+    - port: {{ .Values.jaeger.service.ports.agent_compact }}
+      targetPort: agent-compact
+      protocol: UDP
+      name: agent-compact
+    - port: {{ .Values.jaeger.service.ports.agent_binary }}
+      targetPort: agent-binary
+      protocol: UDP
+      name: agent-binary
+  selector:
+    {{- include "nx-mono-infrastructure.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: jaeger
+{{- end }}

@@ -1,0 +1,244 @@
+version: '3.8'
+
+networks:
+  phase3:
+    driver: bridge
+    name: nx-mono-phase3
+
+services:
+  # Phase 3 Intelligence Agents
+  pricing-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.pricing-agent
+    ports:
+      - '3010:3010'
+    environment:
+      - NODE_ENV=development
+      - PRICING_AGENT_PORT=3010
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - KAFKA_BROKERS=kafka:9092
+      - KAFKA_GROUP_ID=pricing-agent-group
+      - BASE_CURRENCY=BDT
+      - DEMAND_WINDOW_HOURS=24
+      - MAX_PRICE_MULTIPLIER=3.0
+      - MIN_PRICE_MULTIPLIER=0.5
+      - CACHE_EXPIRATION_MINUTES=30
+    depends_on:
+      - redis
+      - kafka
+    networks:
+      - phase3
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
+
+  eagle-eye-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.eagle-eye-runner
+    ports:
+      - '3011:3011'
+    environment:
+      - NODE_ENV=development
+      - EAGLE_EYE_PORT=3011
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - SLOT_DURATION_MINUTES=30
+      - MAX_CONCURRENT_TASKS=5
+      - TASK_TIMEOUT_MS=300000
+      - LEDGER_RETENTION_DAYS=365
+      - LEDGER_COMPRESSION_ENABLED=true
+      - LEDGER_SECRET_KEY=eagle-eye-secret-2024
+      - DEFAULT_TASK_PRIORITY=5
+      - MAX_TASK_RETRIES=3
+      - RETRY_DELAY_MS=5000
+    depends_on:
+      - redis
+    networks:
+      - phase3
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
+      - eagle_eye_data:/app/data
+
+  anomaly-detector:
+    build:
+      context: .
+      dockerfile: Dockerfile.anomaly-detector
+    ports:
+      - '3012:3012'
+    environment:
+      - NODE_ENV=development
+      - ANOMALY_DETECTOR_PORT=3012
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - Z_SCORE_THRESHOLD=3.0
+      - ISOLATION_FOREST_CONTAMINATION=0.1
+      - VELOCITY_THRESHOLD_MINUTES=5
+      - PATTERN_BREAK_THRESHOLD=0.8
+      - MIN_DATA_POINTS=50
+      - MAX_ANOMALIES_PER_HOUR=10
+      - AUTO_LOCK_ROOMS=true
+      - AUTO_FREEZE_ACCOUNTS=false
+      - ALERT_THRESHOLD_LOW=0.6
+      - ALERT_THRESHOLD_MEDIUM=0.75
+      - ALERT_THRESHOLD_HIGH=0.85
+      - ALERT_THRESHOLD_CRITICAL=0.95
+      - MCP_HUB_ENDPOINT=http://mcp-orchestration-hub:8080
+      - MCP_API_KEY=anomaly-detector-key-2024
+      - MCP_MAX_RETRIES=3
+      - MCP_TIMEOUT_MS=30000
+    depends_on:
+      - redis
+      - mcp-orchestration-hub
+    networks:
+      - phase3
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
+      - anomaly_data:/app/data
+
+  # Supporting Services for Phase 3
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data_phase3:/data
+    networks:
+      - phase3
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    ports:
+      - '9092:9092'
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+    depends_on:
+      - zookeeper
+    networks:
+      - phase3
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    ports:
+      - '2181:2181'
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - phase3
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_logs:/var/lib/zookeeper/log
+
+  # MCP Orchestration Hub (Enhanced for Phase 3)
+  mcp-orchestration-hub:
+    image: node:18-alpine
+    working_dir: /app
+    ports:
+      - '8080:8080'
+    volumes:
+      - ./infrastructure/mcp-hub:/app
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - NODE_ENV=development
+      - PORT=8080
+      - REDIS_URL=redis://redis:6379
+      - PRICING_AGENT_URL=http://pricing-agent:3010
+      - EAGLE_EYE_URL=http://eagle-eye-runner:3011
+      - ANOMALY_DETECTOR_URL=http://anomaly-detector:3012
+      - MCP_API_KEY=mcp-hub-key-2024
+      - LOG_LEVEL=info
+    command: |
+      sh -c '
+        if [ ! -f package.json ]; then
+          npm init -y
+          npm install express cors helmet morgan winston pino pino-loki prometheus-api-metrics jaeger-client bull ioredis pg axios
+        fi
+        node server.js
+      '
+    depends_on:
+      - redis
+    networks:
+      - phase3
+
+  # Monitoring Services for Phase 3
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    ports:
+      - '9090:9090'
+    volumes:
+      - ./infrastructure/prometheus/prometheus-phase3.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infrastructure/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data_phase3:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    networks:
+      - phase3
+
+  grafana:
+    image: grafana/grafana:10.2.2
+    ports:
+      - '3000:3000'
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=redis-datasource
+    volumes:
+      - grafana_data_phase3:/var/lib/grafana
+      - ./infrastructure/grafana/dashboards/phase3:/etc/grafana/provisioning/dashboards:ro
+      - ./infrastructure/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+    networks:
+      - phase3
+
+  # BullMQ UI for monitoring queues
+  bullmq-ui:
+    image: deadly0/bull-board:latest
+    ports:
+      - '3001:3000'
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - REDIS_USE_TLS=false
+    depends_on:
+      - redis
+    networks:
+      - phase3
+
+volumes:
+  redis_data_phase3:
+  kafka_data:
+  zookeeper_data:
+  zookeeper_logs:
+  prometheus_data_phase3:
+  grafana_data_phase3:
+  eagle_eye_data:
+  anomaly_data:

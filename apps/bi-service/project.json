@@ -1,0 +1,67 @@
+{
+  "name": "bi-service",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/bi-service/src",
+  "projectType": "application",
+  "implicitDependencies": ["shared-database", "shared-types", "shared-utils"],
+  "targets": {
+    "build": {
+      "executor": "@nx/node:build",
+      "outputs": ["{options.outputPath}"],
+      "defaultConfiguration": "production",
+      "options": {
+        "outputPath": "dist/apps/bi-service",
+        "main": "apps/bi-service/src/main.ts",
+        "tsConfig": "apps/bi-service/tsconfig.app.json"
+      },
+      "configurations": {
+        "development": {
+          "optimization": false,
+          "extractLicenses": false,
+          "inspect": false
+        },
+        "production": {
+          "optimization": true,
+          "extractLicenses": true,
+          "inspect": false,
+          "fileReplacements": [
+            {
+              "replace": "apps/bi-service/src/environments/environment.ts",
+              "with": "apps/bi-service/src/environments/environment.prod.ts"
+            }
+          ]
+        }
+      }
+    },
+    "serve": {
+      "executor": "@nx/node:serve",
+      "defaultConfiguration": "development",
+      "options": {
+        "buildTarget": "bi-service:build"
+      },
+      "configurations": {
+        "development": {
+          "buildTarget": "bi-service:build:development"
+        },
+        "production": {
+          "buildTarget": "bi-service:build:production"
+        }
+      }
+    },
+    "test": {
+      "executor": "@nx/jest:jest",
+      "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
+      "options": {
+        "jestConfig": "apps/bi-service/jest.config.ts",
+        "passWithNoTests": true
+      },
+      "configurations": {
+        "ci": {
+          "ci": true,
+          "coverageReporters": ["text"]
+        }
+      }
+    }
+  },
+  "tags": ["type:app", "scope:analytics", "platform:node"]
+}

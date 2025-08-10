@@ -1,0 +1,477 @@
+# Production-grade values for monitoring and logging stack
+global:
+  imageRegistry: ''
+  imagePullSecrets: []
+  storageClass: 'gp2'
+  environment: 'prod'
+
+# Application configuration
+app:
+  name: nx-mono-app
+  image:
+    repository: nx-mono-app
+    tag: 'latest'
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 3000
+    targetPort: 3000
+  ingress:
+    enabled: true
+    className: 'alb'
+    annotations:
+      kubernetes.io/ingress.class: 'alb'
+      alb.ingress.kubernetes.io/scheme: internet-facing
+      alb.ingress.kubernetes.io/target-type: ip
+      alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+      alb.ingress.kubernetes.io/redirect-to-https: 'true'
+      alb.ingress.kubernetes.io/ssl-policy: 'ELBSecurityPolicy-TLS-1-2-2017-01'
+    hosts:
+      - host: app.nx-mono-repo.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: nx-mono-tls
+        hosts:
+          - app.nx-mono-repo.com
+  env:
+    NODE_ENV: production
+
+# MCP Orchestration Hub
+mcpHub:
+  enabled: true
+  replicaCount: 3
+  image:
+    repository: node
+    tag: '18-alpine'
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
+    targetPort: 8080
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+  env:
+    NODE_ENV: production
+    PORT: 8080
+
+# BullMQ UI
+bullmqUI:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: deadly0/bull-board
+    tag: 'latest'
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 3000
+    targetPort: 3000
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 200m
+      memory: 256Mi
+
+# Jaeger Tracing (Production setup with Elasticsearch)
+jaeger:
+  enabled: true
+  strategy: production
+  collector:
+    replicaCount: 3
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+  query:
+    replicaCount: 2
+    resources:
+      limits:
+        cpu: 500m
+        memory: 1Gi
+      requests:
+        cpu: 250m
+        memory: 512Mi
+  storage:
+    type: elasticsearch
+    elasticsearch:
+      nodeCount: 3
+      resources:
+        limits:
+          cpu: 1000m
+          memory: 2Gi
+        requests:
+          cpu: 500m
+          memory: 1Gi
+
+# Nginx Ingress Controller
+nginx:
+  enabled: false # We use AWS Load Balancer Controller instead
+
+# PostgreSQL (External managed RDS)
+postgresql:
+  enabled: false
+
+# Redis (External managed ElastiCache)
+redis:
+  enabled: false
+
+# Prometheus Stack (kube-prometheus-stack)
+kube-prometheus-stack:
+  enabled: true
+  fullnameOverride: prometheus
+
+  alertmanager:
+    enabled: true
+    alertmanagerSpec:
+      replicas: 3
+      retention: '120h'
+      resources:
+        limits:
+          cpu: 500m
+          memory: 1Gi
+        requests:
+          cpu: 250m
+          memory: 512Mi
+      storage:
+        volumeClaimTemplate:
+          spec:
+            accessModes: ['ReadWriteOnce']
+            resources:
+              requests:
+                storage: 10Gi
+    config:
+      global:
+        smtp_smarthost: 'localhost:587'
+        smtp_from: 'alerts@nx-mono-repo.com'
+      route:
+        group_by: ['alertname']
+        group_wait: 10s
+        group_interval: 10s
+        repeat_interval: 1h
+        receiver: 'web.hook'
+      receivers:
+        - name: 'web.hook'
+          webhook_configs:
+            - url: 'http://alertmanager-webhook:5000/'
+
+  prometheus:
+    prometheusSpec:
+      replicas: 3
+      retention: 30d
+      retentionSize: 50GB
+      resources:
+        limits:
+          cpu: 4000m
+          memory: 8Gi
+        requests:
+          cpu: 2000m
+          memory: 4Gi
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            accessModes: ['ReadWriteOnce']
+            resources:
+              requests:
+                storage: 100Gi
+      additionalScrapeConfigs: |
+        - job_name: 'kubernetes-pods'
+          kubernetes_sd_configs:
+            - role: pod
+          relabel_configs:
+            - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+              action: keep
+              regex: true
+            - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+              action: replace
+              target_label: __metrics_path__
+              regex: (.+)
+            - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+              action: replace
+              regex: ([^:]+)(?::\d+)?;(\d+)
+              replacement: $1:$2
+              target_label: __address__
+            - action: labelmap
+              regex: __meta_kubernetes_pod_label_(.+)
+            - source_labels: [__meta_kubernetes_namespace]
+              action: replace
+              target_label: kubernetes_namespace
+            - source_labels: [__meta_kubernetes_pod_name]
+              action: replace
+              target_label: kubernetes_pod_name
+
+  grafana:
+    enabled: true
+    replicas: 2
+    adminPassword: 'secure-admin-password'
+    persistence:
+      enabled: true
+      size: 10Gi
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+      requests:
+        cpu: 500m
+        memory: 512Mi
+    dashboardProviders:
+      dashboardproviders.yaml:
+        apiVersion: 1
+        providers:
+          - name: 'nx-mono-repo'
+            orgId: 1
+            folder: 'NX Mono Repo'
+            type: file
+            disableDeletion: false
+            editable: true
+            options:
+              path: /var/lib/grafana/dashboards/nx-mono-repo
+    dashboards:
+      nx-mono-repo:
+        kubernetes-cluster:
+          gnetId: 7249
+          revision: 1
+          datasource: Prometheus
+        kubernetes-pods:
+          gnetId: 6417
+          revision: 1
+          datasource: Prometheus
+        nodejs-application:
+          gnetId: 11159
+          revision: 1
+          datasource: Prometheus
+        nginx-ingress:
+          gnetId: 9614
+          revision: 1
+          datasource: Prometheus
+        postgresql:
+          gnetId: 9628
+          revision: 7
+          datasource: Prometheus
+        redis:
+          gnetId: 763
+          revision: 4
+          datasource: Prometheus
+    datasources:
+      datasources.yaml:
+        apiVersion: 1
+        datasources:
+          - name: Prometheus
+            type: prometheus
+            url: http://prometheus-kube-prometheus-prometheus:9090
+            isDefault: true
+          - name: Loki
+            type: loki
+            url: http://loki:3100
+          - name: Jaeger
+            type: jaeger
+            url: http://jaeger-query:16686
+          - name: Alertmanager
+            type: alertmanager
+            url: http://prometheus-kube-prometheus-alertmanager:9093
+
+# Loki for Log Aggregation
+loki:
+  enabled: true
+  loki:
+    replicas: 3
+    persistence:
+      enabled: true
+      size: 50Gi
+    resources:
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+    config:
+      auth_enabled: false
+      server:
+        http_listen_port: 3100
+        grpc_listen_port: 9096
+      common:
+        path_prefix: /loki
+        storage:
+          filesystem:
+            chunks_directory: /loki/chunks
+            rules_directory: /loki/rules
+        replication_factor: 1
+      schema_config:
+        configs:
+          - from: 2020-10-24
+            store: boltdb-shipper
+            object_store: filesystem
+            schema: v11
+            index:
+              prefix: index_
+              period: 24h
+      storage_config:
+        boltdb_shipper:
+          active_index_directory: /loki/boltdb-shipper-active
+          cache_location: /loki/boltdb-shipper-cache
+          shared_store: filesystem
+        filesystem:
+          directory: /loki/chunks
+      limits_config:
+        enforce_metric_name: false
+        reject_old_samples: true
+        reject_old_samples_max_age: 168h
+        ingestion_rate_mb: 64
+        ingestion_burst_size_mb: 128
+
+# Promtail for Log Collection
+promtail:
+  enabled: true
+  config:
+    serverPort: 3101
+    clients:
+      - url: http://loki:3100/loki/api/v1/push
+    scrapeConfigs:
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels:
+              - __meta_kubernetes_pod_controller_name
+            regex: ([0-9a-z-.]+?)(-[0-9a-f]{8,10})?
+            target_label: __tmp_controller_name
+          - source_labels:
+              - __meta_kubernetes_pod_label_app_kubernetes_io_name
+              - __meta_kubernetes_pod_label_app
+              - __tmp_controller_name
+              - __meta_kubernetes_pod_name
+            regex: ^;*([^;]+)(;.*)?$
+            target_label: app
+            replacement: $1
+          - source_labels:
+              - __meta_kubernetes_pod_label_app_kubernetes_io_component
+              - __meta_kubernetes_pod_label_component
+            regex: ^;*([^;]+)(;.*)?$
+            target_label: component
+            replacement: $1
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node_name
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            target_label: container
+          - source_labels:
+              [__meta_kubernetes_pod_uid, __meta_kubernetes_pod_container_name]
+            target_label: __path__
+            separator: /
+            replacement: /var/log/pods/*$1/*.log
+        pipeline_stages:
+          - cri: {}
+          - json:
+              expressions:
+                level: level
+                timestamp: timestamp
+                message: message
+          - timestamp:
+              source: timestamp
+              format: RFC3339Nano
+          - labels:
+              level:
+          - output:
+              source: message
+
+# Node Exporter for System Metrics
+nodeExporter:
+  enabled: true
+
+# kube-state-metrics for Kubernetes Metrics
+kubeStateMetrics:
+  enabled: true
+
+# Service Monitors
+serviceMonitor:
+  enabled: true
+  namespace: monitoring
+  interval: 30s
+  scrapeTimeout: 10s
+
+# Network Policies for Security
+networkPolicy:
+  enabled: true
+  policyTypes:
+    - Ingress
+    - Egress
+
+# Pod Security Policies
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  fsGroup: 65534
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65534
+  capabilities:
+    drop:
+      - ALL
+
+# Resource Quotas
+resourceQuota:
+  enabled: true
+  hard:
+    requests.cpu: '20'
+    requests.memory: 40Gi
+    limits.cpu: '40'
+    limits.memory: 80Gi
+    persistentvolumeclaims: '20'
+
+# Limit Ranges
+limitRange:
+  enabled: true
+  limits:
+    - default:
+        cpu: 500m
+        memory: 512Mi
+      defaultRequest:
+        cpu: 100m
+        memory: 128Mi
+      type: Container
+
+# Node Selector for Infrastructure Components
+nodeSelector:
+  kubernetes.io/os: linux
+
+# Tolerations
+tolerations: []
+
+# Affinity Rules for High Availability
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - prometheus
+                  - grafana
+                  - loki
+          topologyKey: kubernetes.io/hostname

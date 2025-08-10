@@ -1,0 +1,768 @@
+openapi: 3.0.0
+info:
+  title: Booking Platform Microservices API
+  version: 1.0.0
+  description: Complete API specification for Payment, Reservation, Ledger, and Notification services
+
+servers:
+  - url: http://localhost:3001
+    description: Payment Service
+  - url: http://localhost:3002
+    description: Reservation Service
+  - url: http://localhost:3003
+    description: Ledger Service
+  - url: http://localhost:3004
+    description: Notification Service
+
+paths:
+  # Payment Service Endpoints
+  /api/v1/payments/initiate:
+    post:
+      tags: [Payment]
+      summary: Initiate a payment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InitiatePaymentRequest'
+      responses:
+        '200':
+          description: Payment initiated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InitiatePaymentResponse'
+        '400':
+          description: Bad request
+        '500':
+          description: Internal server error
+
+  /api/v1/payments/{paymentId}/confirm:
+    post:
+      tags: [Payment]
+      summary: Confirm a payment
+      parameters:
+        - name: paymentId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfirmPaymentRequest'
+      responses:
+        '200':
+          description: Payment confirmed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfirmPaymentResponse'
+
+  /api/v1/payments/{paymentId}:
+    get:
+      tags: [Payment]
+      summary: Get payment status
+      parameters:
+        - name: paymentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Payment status retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentStatus'
+
+  /api/v1/payments/webhook/{provider}:
+    post:
+      tags: [Payment]
+      summary: Payment provider webhook
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [bkash, nagad, sslcommerz]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Webhook processed successfully
+
+  # Reservation Service Endpoints
+  /api/v1/reservations:
+    post:
+      tags: [Reservation]
+      summary: Create a reservation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReservationRequest'
+      responses:
+        '201':
+          description: Reservation created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateReservationResponse'
+
+    get:
+      tags: [Reservation]
+      summary: List reservations
+      parameters:
+        - name: customerId
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/ReservationStatus'
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+      responses:
+        '200':
+          description: Reservations retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListReservationsResponse'
+
+  /api/v1/reservations/{reservationId}:
+    get:
+      tags: [Reservation]
+      summary: Get reservation details
+      parameters:
+        - name: reservationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Reservation details retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReservationDetails'
+
+    put:
+      tags: [Reservation]
+      summary: Update reservation status
+      parameters:
+        - name: reservationId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateReservationStatusRequest'
+      responses:
+        '200':
+          description: Reservation status updated successfully
+
+    delete:
+      tags: [Reservation]
+      summary: Cancel reservation
+      parameters:
+        - name: reservationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Reservation cancelled successfully
+
+  # Ledger Service Endpoints
+  /api/v1/ledger/entries:
+    post:
+      tags: [Ledger]
+      summary: Create ledger entry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLedgerEntryRequest'
+      responses:
+        '201':
+          description: Ledger entry created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateLedgerEntryResponse'
+
+  /api/v1/ledger/entries/{entryId}:
+    get:
+      tags: [Ledger]
+      summary: Get ledger entry
+      parameters:
+        - name: entryId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Ledger entry retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerEntry'
+
+  /api/v1/ledger/accounts/{accountId}/balance:
+    get:
+      tags: [Ledger]
+      summary: Get account balance
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: currency
+          in: query
+          schema:
+            type: string
+            default: BDT
+      responses:
+        '200':
+          description: Account balance retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountBalance'
+
+  /api/v1/ledger/accounts/{accountId}/history:
+    get:
+      tags: [Ledger]
+      summary: Get transaction history
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: currency
+          in: query
+          schema:
+            type: string
+        - name: fromDate
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: toDate
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+      responses:
+        '200':
+          description: Transaction history retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionHistory'
+
+  # Notification Service Endpoints
+  /api/v1/notifications/sms:
+    post:
+      tags: [Notification]
+      summary: Send SMS notification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendSMSRequest'
+      responses:
+        '200':
+          description: SMS sent successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendSMSResponse'
+
+  /api/v1/notifications/whatsapp:
+    post:
+      tags: [Notification]
+      summary: Send WhatsApp notification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendWhatsAppRequest'
+      responses:
+        '200':
+          description: WhatsApp message sent successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendWhatsAppResponse'
+
+  /api/v1/notifications/email:
+    post:
+      tags: [Notification]
+      summary: Send email notification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendEmailRequest'
+      responses:
+        '200':
+          description: Email sent successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendEmailResponse'
+
+  /api/v1/notifications/{messageId}/status:
+    get:
+      tags: [Notification]
+      summary: Get delivery status
+      parameters:
+        - name: messageId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Delivery status retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliveryStatus'
+
+components:
+  schemas:
+    # Payment Schemas
+    InitiatePaymentRequest:
+      type: object
+      required: [bookingId, amount, currency, provider, customerPhone]
+      properties:
+        bookingId:
+          type: string
+        amount:
+          type: number
+        currency:
+          type: string
+          enum: [BDT, USD]
+        provider:
+          $ref: '#/components/schemas/PaymentProvider'
+        customerPhone:
+          type: string
+        customerEmail:
+          type: string
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    InitiatePaymentResponse:
+      type: object
+      properties:
+        paymentId:
+          type: string
+        transactionId:
+          type: string
+        status:
+          $ref: '#/components/schemas/PaymentStatus'
+        redirectUrl:
+          type: string
+        errorMessage:
+          type: string
+
+    ConfirmPaymentRequest:
+      type: object
+      required: [transactionId, providerReference]
+      properties:
+        transactionId:
+          type: string
+        providerReference:
+          type: string
+        providerData:
+          type: object
+          additionalProperties:
+            type: string
+
+    ConfirmPaymentResponse:
+      type: object
+      properties:
+        paymentId:
+          type: string
+        status:
+          $ref: '#/components/schemas/PaymentStatus'
+        amount:
+          type: number
+        errorMessage:
+          type: string
+
+    PaymentStatus:
+      type: string
+      enum: [PENDING, PROCESSING, COMPLETED, FAILED, CANCELLED, REFUNDED]
+
+    PaymentProvider:
+      type: string
+      enum: [BKASH, NAGAD, SSLCOMMERZ]
+
+    # Reservation Schemas
+    CreateReservationRequest:
+      type: object
+      required: [customerId, serviceId, startTime, endTime, amount, currency]
+      properties:
+        customerId:
+          type: string
+        serviceId:
+          type: string
+        startTime:
+          type: string
+          format: date-time
+        endTime:
+          type: string
+          format: date-time
+        amount:
+          type: number
+        currency:
+          type: string
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    CreateReservationResponse:
+      type: object
+      properties:
+        reservationId:
+          type: string
+        status:
+          $ref: '#/components/schemas/ReservationStatus'
+        errorMessage:
+          type: string
+
+    UpdateReservationStatusRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          $ref: '#/components/schemas/ReservationStatus'
+        paymentId:
+          type: string
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    ReservationDetails:
+      type: object
+      properties:
+        reservationId:
+          type: string
+        customerId:
+          type: string
+        serviceId:
+          type: string
+        status:
+          $ref: '#/components/schemas/ReservationStatus'
+        startTime:
+          type: string
+          format: date-time
+        endTime:
+          type: string
+          format: date-time
+        amount:
+          type: number
+        currency:
+          type: string
+        paymentId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    ListReservationsResponse:
+      type: object
+      properties:
+        reservations:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReservationDetails'
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+
+    ReservationStatus:
+      type: string
+      enum:
+        [
+          REQUESTED,
+          PAYMENT_PENDING,
+          PAYMENT_CONFIRMED,
+          BOOKING_CONFIRMED,
+          CANCELLED,
+          COMPLETED,
+          REFUNDED,
+        ]
+
+    # Ledger Schemas
+    CreateLedgerEntryRequest:
+      type: object
+      required: [accountId, type, amount, currency, referenceId, referenceType]
+      properties:
+        accountId:
+          type: string
+        type:
+          $ref: '#/components/schemas/TransactionType'
+        amount:
+          type: number
+        currency:
+          type: string
+        referenceId:
+          type: string
+        referenceType:
+          type: string
+        description:
+          type: string
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    CreateLedgerEntryResponse:
+      type: object
+      properties:
+        entryId:
+          type: string
+        sequenceNumber:
+          type: integer
+        errorMessage:
+          type: string
+
+    LedgerEntry:
+      type: object
+      properties:
+        entryId:
+          type: string
+        accountId:
+          type: string
+        type:
+          $ref: '#/components/schemas/TransactionType'
+        amount:
+          type: number
+        currency:
+          type: string
+        referenceId:
+          type: string
+        referenceType:
+          type: string
+        description:
+          type: string
+        sequenceNumber:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    AccountBalance:
+      type: object
+      properties:
+        accountId:
+          type: string
+        balance:
+          type: number
+        currency:
+          type: string
+        lastUpdated:
+          type: string
+          format: date-time
+
+    TransactionHistory:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/LedgerEntry'
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+
+    TransactionType:
+      type: string
+      enum: [CREDIT, DEBIT, HOLD, RELEASE, REFUND]
+
+    # Notification Schemas
+    SendSMSRequest:
+      type: object
+      required: [to, body]
+      properties:
+        to:
+          type: string
+        from:
+          type: string
+        body:
+          type: string
+        templateId:
+          type: string
+        templateData:
+          type: object
+          additionalProperties:
+            type: string
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    SendSMSResponse:
+      type: object
+      properties:
+        messageId:
+          type: string
+        status:
+          $ref: '#/components/schemas/DeliveryStatus'
+        errorMessage:
+          type: string
+
+    SendWhatsAppRequest:
+      type: object
+      required: [to, body]
+      properties:
+        to:
+          type: string
+        from:
+          type: string
+        body:
+          type: string
+        templateId:
+          type: string
+        templateData:
+          type: object
+          additionalProperties:
+            type: string
+        media:
+          type: array
+          items:
+            $ref: '#/components/schemas/MediaAttachment'
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    SendWhatsAppResponse:
+      type: object
+      properties:
+        messageId:
+          type: string
+        status:
+          $ref: '#/components/schemas/DeliveryStatus'
+        errorMessage:
+          type: string
+
+    SendEmailRequest:
+      type: object
+      required: [to, subject, body]
+      properties:
+        to:
+          type: string
+        from:
+          type: string
+        subject:
+          type: string
+        body:
+          type: string
+        templateId:
+          type: string
+        templateData:
+          type: object
+          additionalProperties:
+            type: string
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/MediaAttachment'
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    SendEmailResponse:
+      type: object
+      properties:
+        messageId:
+          type: string
+        status:
+          $ref: '#/components/schemas/DeliveryStatus'
+        errorMessage:
+          type: string
+
+    MediaAttachment:
+      type: object
+      properties:
+        url:
+          type: string
+        contentType:
+          type: string
+        filename:
+          type: string
+
+    DeliveryStatus:
+      type: string
+      enum: [QUEUED, SENT, DELIVERED, FAILED, UNDELIVERED]

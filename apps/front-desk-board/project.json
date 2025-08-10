@@ -1,0 +1,57 @@
+{
+  "name": "front-desk-board",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/front-desk-board/src",
+  "projectType": "application",
+  "tags": [],
+  "targets": {
+    "build": {
+      "executor": "@nx/next:build",
+      "outputs": ["{options.outputPath}"],
+      "defaultConfiguration": "production",
+      "options": {
+        "root": "apps/front-desk-board",
+        "outputPath": "dist/apps/front-desk-board"
+      },
+      "configurations": {
+        "development": {
+          "outputPath": "apps/front-desk-board"
+        },
+        "production": {}
+      }
+    },
+    "serve": {
+      "executor": "@nx/next:server",
+      "defaultConfiguration": "development",
+      "options": {
+        "buildTarget": "front-desk-board:build",
+        "dev": true,
+        "port": 3002
+      },
+      "configurations": {
+        "development": {
+          "buildTarget": "front-desk-board:build:development",
+          "dev": true
+        },
+        "production": {
+          "buildTarget": "front-desk-board:build:production",
+          "dev": false
+        }
+      }
+    },
+    "lint": {
+      "executor": "@nx/linter:eslint",
+      "outputs": ["{options.outputFile}"],
+      "options": {
+        "lintFilePatterns": ["apps/front-desk-board/**/*.{ts,tsx,js,jsx}"]
+      }
+    },
+    "test": {
+      "executor": "@nx/jest:jest",
+      "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
+      "options": {
+        "jestConfig": "apps/front-desk-board/jest.config.ts"
+      }
+    }
+  }
+}

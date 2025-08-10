@@ -1,0 +1,343 @@
+global:
+  imageRegistry: ''
+  imagePullSecrets: []
+  storageClass: ''
+
+# Application configuration
+app:
+  name: nx-mono-app
+  image:
+    repository: nx-mono-app
+    tag: 'latest'
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 3000
+    targetPort: 3000
+  ingress:
+    enabled: true
+    className: 'nginx'
+    annotations: {}
+    hosts:
+      - host: nx-mono.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+  env:
+    NODE_ENV: production
+
+# MCP Orchestration Hub
+mcpHub:
+  enabled: true
+  image:
+    repository: node
+    tag: '18-alpine'
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
+    targetPort: 8080
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+  env:
+    NODE_ENV: production
+    PORT: 8080
+
+# BullMQ UI
+bullmqUI:
+  enabled: true
+  image:
+    repository: deadly0/bull-board
+    tag: 'latest'
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 3000
+    targetPort: 3000
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+# Jaeger Tracing
+jaeger:
+  enabled: true
+  image:
+    repository: jaegertracing/all-in-one
+    tag: '1.51'
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    ports:
+      ui: 16686
+      collector_http: 14268
+      collector_grpc: 14250
+      agent_compact: 6831
+      agent_binary: 6832
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+  env:
+    COLLECTOR_OTLP_ENABLED: 'true'
+    LOG_LEVEL: 'info'
+
+# Nginx Ingress
+nginx:
+  enabled: true
+  image:
+    repository: nginx
+    tag: 'alpine'
+    pullPolicy: IfNotPresent
+  service:
+    type: LoadBalancer
+    ports:
+      http: 80
+      https: 443
+  resources:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 250m
+      memory: 128Mi
+  config:
+    worker_processes: 'auto'
+    worker_connections: 1024
+
+# PostgreSQL (Bitnami Chart)
+postgresql:
+  enabled: true
+  auth:
+    database: nx_mono_repo
+    username: postgres
+    password: postgres
+  primary:
+    persistence:
+      enabled: true
+      size: 8Gi
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+      requests:
+        cpu: 500m
+        memory: 512Mi
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+# Redis (Bitnami Chart)
+redis:
+  enabled: true
+  auth:
+    enabled: false
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 250m
+        memory: 256Mi
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+# Prometheus (Community Chart)
+prometheus:
+  enabled: true
+  prometheus:
+    prometheusSpec:
+      retention: 30d
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            accessModes: ['ReadWriteOnce']
+            resources:
+              requests:
+                storage: 10Gi
+      resources:
+        limits:
+          cpu: 2000m
+          memory: 4Gi
+        requests:
+          cpu: 1000m
+          memory: 2Gi
+      serviceMonitorSelectorNilUsesHelmValues: false
+      podMonitorSelectorNilUsesHelmValues: false
+      ruleSelectorNilUsesHelmValues: false
+  alertmanager:
+    enabled: false
+  grafana:
+    enabled: false # We'll use our own Grafana
+
+# Grafana (Community Chart)
+grafana:
+  enabled: true
+  adminPassword: admin
+  service:
+    type: ClusterIP
+    port: 3000
+  persistence:
+    enabled: true
+    size: 1Gi
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          type: prometheus
+          url: http://prometheus-server:80
+          isDefault: true
+        - name: Loki
+          type: loki
+          url: http://loki:3100
+        - name: Jaeger
+          type: jaeger
+          url: http://jaeger:16686
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: 'default'
+          orgId: 1
+          folder: ''
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/default
+
+# Loki (Community Chart)
+loki:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 10Gi
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+  config:
+    auth_enabled: false
+    server:
+      http_listen_port: 3100
+    limits_config:
+      enforce_metric_name: false
+      reject_old_samples: true
+      reject_old_samples_max_age: 168h
+      ingestion_rate_mb: 16
+      ingestion_burst_size_mb: 32
+
+# Promtail (Community Chart)
+promtail:
+  enabled: true
+  config:
+    clients:
+      - url: http://loki:3100/loki/api/v1/push
+    scrapeConfigs:
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels:
+              - __meta_kubernetes_pod_controller_name
+            regex: ([0-9a-z-.]+?)(-[0-9a-f]{8,10})?
+            target_label: __tmp_controller_name
+          - source_labels:
+              - __meta_kubernetes_pod_label_app_kubernetes_io_name
+              - __meta_kubernetes_pod_label_app
+              - __tmp_controller_name
+              - __meta_kubernetes_pod_name
+            regex: ^;*([^;]+)(;.*)?$
+            target_label: app
+            replacement: $1
+          - source_labels:
+              - __meta_kubernetes_pod_label_app_kubernetes_io_component
+              - __meta_kubernetes_pod_label_component
+            regex: ^;*([^;]+)(;.*)?$
+            target_label: component
+            replacement: $1
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node_name
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            target_label: container
+          - source_labels:
+              [__meta_kubernetes_pod_uid, __meta_kubernetes_pod_container_name]
+            target_label: __path__
+            separator: /
+            replacement: /var/log/pods/*$1/*.log
+          - source_labels:
+              [
+                __meta_kubernetes_pod_annotationpresent_kubernetes_io_config_hash,
+              ]
+            target_label: __tmp_hash
+            replacement: $1
+        pipeline_stages:
+          - cri: {}
+
+# Service Monitors
+serviceMonitor:
+  enabled: true
+  namespace: monitoring
+  interval: 30s
+  scrapeTimeout: 10s
+
+# Network Policies
+networkPolicy:
+  enabled: false
+
+# Pod Security Context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+# Security Context
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+
+# Node Selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}

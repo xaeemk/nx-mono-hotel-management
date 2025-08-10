@@ -1,0 +1,649 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "./generated/client"
+  binaryTargets = ["native"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Enums
+enum ReservationStatus {
+  PENDING
+  CONFIRMED
+  CHECKED_IN
+  CHECKED_OUT
+  CANCELLED
+  NO_SHOW
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum PaymentMethod {
+  CASH
+  CREDIT_CARD
+  DEBIT_CARD
+  BANK_TRANSFER
+  MOBILE_PAYMENT
+  CRYPTO
+  CHECK
+}
+
+enum RoomStatus {
+  AVAILABLE
+  OCCUPIED
+  OUT_OF_ORDER
+  MAINTENANCE
+  CLEANING
+  RESERVED
+}
+
+enum RoomType {
+  STANDARD
+  DELUXE
+  SUITE
+  PRESIDENTIAL
+  FAMILY
+  ACCESSIBLE
+  STUDIO
+  PENTHOUSE
+}
+
+enum LedgerEntryType {
+  REVENUE
+  EXPENSE
+  REFUND
+  FEE
+  TAX
+  ADJUSTMENT
+  DEPOSIT
+  WITHDRAWAL
+}
+
+enum GuestType {
+  INDIVIDUAL
+  CORPORATE
+  GROUP
+  VIP
+  LOYALTY_MEMBER
+}
+
+// Core Tables
+
+model Guest {
+  id                String      @id @default(cuid())
+  guestType         GuestType   @default(INDIVIDUAL)
+  
+  // Personal Information
+  firstName         String      @db.VarChar(100)
+  lastName          String      @db.VarChar(100)
+  email             String      @unique @db.VarChar(255)
+  phone             String?     @db.VarChar(20)
+  dateOfBirth       DateTime?   @db.Date
+  
+  // Address Information
+  addressLine1      String?     @db.VarChar(255)
+  addressLine2      String?     @db.VarChar(255)
+  city              String?     @db.VarChar(100)
+  state             String?     @db.VarChar(100)
+  postalCode        String?     @db.VarChar(20)
+  country           String?     @db.VarChar(100)
+  
+  // Business Information (for corporate guests)
+  companyName       String?     @db.VarChar(255)
+  taxId             String?     @db.VarChar(50)
+  
+  // Preferences and Notes
+  preferences       Json?
+  specialRequests   String?     @db.Text
+  notes             String?     @db.Text
+  
+  // Loyalty and Marketing
+  loyaltyNumber     String?     @unique @db.VarChar(50)
+  marketingOptIn    Boolean     @default(false)
+  
+  // Audit fields
+  createdAt         DateTime    @default(now()) @db.Timestamptz
+  updatedAt         DateTime    @updatedAt @db.Timestamptz
+  createdBy         String?     @db.VarChar(100)
+  updatedBy         String?     @db.VarChar(100)
+  version           Int         @default(1)
+  
+  // Relationships
+  reservations      Reservation[]
+  payments          Payment[]
+  ledgerEntries     LedgerEntry[]
+  
+  @@map("guests")
+  @@index([email])
+  @@index([lastName, firstName])
+  @@index([loyaltyNumber])
+  @@index([guestType])
+  @@index([createdAt])
+}
+
+model Room {
+  id                String          @id @default(cuid())
+  roomNumber        String          @unique @db.VarChar(20)
+  roomType          RoomType
+  status            RoomStatus      @default(AVAILABLE)
+  
+  // Room Details
+  floor             Int?
+  building          String?         @db.VarChar(50)
+  maxOccupancy      Int             @default(2)
+  bedCount          Int             @default(1)
+  bedType           String?         @db.VarChar(50)
+  
+  // Room Features
+  amenities         Json?
+  area              Decimal?        @db.Decimal(8,2) // in square feet/meters
+  hasBalcony        Boolean         @default(false)
+  hasKitchen        Boolean         @default(false)
+  isAccessible      Boolean         @default(false)
+  smokingAllowed    Boolean         @default(false)
+  
+  // Pricing and Availability
+  baseRate          Decimal         @db.Decimal(10,2)
+  currency          String          @default("USD") @db.VarChar(3)
+  
+  // Maintenance and Status
+  lastCleaned       DateTime?       @db.Timestamptz
+  lastMaintenance   DateTime?       @db.Timestamptz
+  outOfOrderReason  String?         @db.Text
+  notes             String?         @db.Text
+  
+  // Audit fields
+  createdAt         DateTime        @default(now()) @db.Timestamptz
+  updatedAt         DateTime        @updatedAt @db.Timestamptz
+  createdBy         String?         @db.VarChar(100)
+  updatedBy         String?         @db.VarChar(100)
+  version           Int             @default(1)
+  
+  // Relationships
+  reservations      Reservation[]
+  ratePlans         RoomRatePlan[]
+  
+  @@map("rooms")
+  @@index([roomNumber])
+  @@index([roomType])
+  @@index([status])
+  @@index([floor])
+}
+
+model RatePlan {
+  id                String          @id @default(cuid())
+  name              String          @db.VarChar(255)
+  code              String          @unique @db.VarChar(50)
+  description       String?         @db.Text
+  
+  // Rate Details
+  baseRate          Decimal         @db.Decimal(10,2)
+  currency          String          @default("USD") @db.VarChar(3)
+  
+  // Availability and Restrictions
+  validFrom         DateTime        @db.Date
+  validTo           DateTime        @db.Date
+  minimumStay       Int             @default(1)
+  maximumStay       Int?
+  advanceBooking    Int?            // days in advance required
+  
+  // Rate Modifiers
+  weekdayMultiplier Decimal         @default(1.0) @db.Decimal(4,3)
+  weekendMultiplier Decimal         @default(1.0) @db.Decimal(4,3)
+  holidayMultiplier Decimal         @default(1.0) @db.Decimal(4,3)
+  
+  // Booking Conditions
+  isRefundable      Boolean         @default(true)
+  cancellationHours Int             @default(24)
+  prepaymentRequired Boolean        @default(false)
+  
+  // Inclusions and Benefits
+  inclusions        Json?           // breakfast, wifi, parking, etc.
+  restrictions      Json?           // age restrictions, member only, etc.
+  
+  // Status
+  isActive          Boolean         @default(true)
+  isPublic          Boolean         @default(true) // visible to public or agent only
+  
+  // Audit fields
+  createdAt         DateTime        @default(now()) @db.Timestamptz
+  updatedAt         DateTime        @updatedAt @db.Timestamptz
+  createdBy         String?         @db.VarChar(100)
+  updatedBy         String?         @db.VarChar(100)
+  version           Int             @default(1)
+  
+  // Relationships
+  roomRatePlans     RoomRatePlan[]
+  reservations      Reservation[]
+  
+  @@map("rate_plans")
+  @@index([code])
+  @@index([validFrom, validTo])
+  @@index([isActive])
+}
+
+// Junction table for Room and RatePlan many-to-many relationship
+model RoomRatePlan {
+  id                String          @id @default(cuid())
+  roomId            String
+  ratePlanId        String
+  
+  // Override rates for specific room-rate combinations
+  overrideRate      Decimal?        @db.Decimal(10,2)
+  validFrom         DateTime?       @db.Date
+  validTo           DateTime?       @db.Date
+  isActive          Boolean         @default(true)
+  
+  // Audit fields
+  createdAt         DateTime        @default(now()) @db.Timestamptz
+  updatedAt         DateTime        @updatedAt @db.Timestamptz
+  
+  // Relationships
+  room              Room            @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  ratePlan          RatePlan        @relation(fields: [ratePlanId], references: [id], onDelete: Cascade)
+  
+  @@map("room_rate_plans")
+  @@unique([roomId, ratePlanId])
+  @@index([roomId])
+  @@index([ratePlanId])
+}
+
+model Reservation {
+  id                String              @id @default(cuid())
+  reservationNumber String              @unique @db.VarChar(50)
+  status            ReservationStatus   @default(PENDING)
+  
+  // Guest and Room Information
+  guestId           String
+  roomId            String
+  ratePlanId        String
+  
+  // Stay Details
+  checkInDate       DateTime            @db.Date
+  checkOutDate      DateTime            @db.Date
+  nights            Int
+  adults            Int                 @default(1)
+  children          Int                 @default(0)
+  infants           Int                 @default(0)
+  
+  // Pricing
+  roomRate          Decimal             @db.Decimal(10,2)
+  totalAmount       Decimal             @db.Decimal(10,2)
+  taxAmount         Decimal             @default(0) @db.Decimal(10,2)
+  fees              Decimal             @default(0) @db.Decimal(10,2)
+  discountAmount    Decimal             @default(0) @db.Decimal(10,2)
+  currency          String              @default("USD") @db.VarChar(3)
+  
+  // Booking Details
+  bookedAt          DateTime            @default(now()) @db.Timestamptz
+  bookedBy          String?             @db.VarChar(100)
+  source            String?             @db.VarChar(50) // website, phone, walk-in, OTA
+  confirmationSentAt DateTime?          @db.Timestamptz
+  
+  // Check-in/Check-out
+  actualCheckIn     DateTime?           @db.Timestamptz
+  actualCheckOut    DateTime?           @db.Timestamptz
+  earlyCheckIn      Boolean             @default(false)
+  lateCheckOut      Boolean             @default(false)
+  
+  // Special Requests and Notes
+  specialRequests   String?             @db.Text
+  internalNotes     String?             @db.Text
+  guestNotes        String?             @db.Text
+  
+  // Cancellation
+  cancelledAt       DateTime?           @db.Timestamptz
+  cancelledBy       String?             @db.VarChar(100)
+  cancellationReason String?            @db.Text
+  refundAmount      Decimal?            @db.Decimal(10,2)
+  
+  // Group Booking
+  groupId           String?             @db.VarChar(50)
+  isGroupMaster     Boolean             @default(false)
+  
+  // Audit fields
+  createdAt         DateTime            @default(now()) @db.Timestamptz
+  updatedAt         DateTime            @updatedAt @db.Timestamptz
+  createdBy         String?             @db.VarChar(100)
+  updatedBy         String?             @db.VarChar(100)
+  version           Int                 @default(1)
+  
+  // Relationships
+  guest             Guest               @relation(fields: [guestId], references: [id])
+  room              Room                @relation(fields: [roomId], references: [id])
+  ratePlan          RatePlan            @relation(fields: [ratePlanId], references: [id])
+  payments          Payment[]
+  ledgerEntries     LedgerEntry[]
+  
+  @@map("reservations")
+  @@index([reservationNumber])
+  @@index([guestId])
+  @@index([roomId])
+  @@index([status])
+  @@index([checkInDate, checkOutDate])
+  @@index([bookedAt])
+  @@index([groupId])
+}
+
+model Payment {
+  id                String          @id @default(cuid())
+  paymentNumber     String          @unique @db.VarChar(50)
+  status            PaymentStatus   @default(PENDING)
+  method            PaymentMethod
+  
+  // Payment Details
+  amount            Decimal         @db.Decimal(10,2)
+  currency          String          @default("USD") @db.VarChar(3)
+  
+  // Relationships
+  guestId           String
+  reservationId     String?         // nullable for standalone payments
+  
+  // Transaction Details
+  transactionId     String?         @db.VarChar(255) // external payment processor ID
+  gatewayResponse   Json?           // full response from payment gateway
+  
+  // Authorization and Settlement
+  authorizationCode String?         @db.VarChar(50)
+  authorizedAt      DateTime?       @db.Timestamptz
+  settledAt         DateTime?       @db.Timestamptz
+  
+  // Card Information (tokenized)
+  cardToken         String?         @db.VarChar(255)
+  cardLast4         String?         @db.VarChar(4)
+  cardBrand         String?         @db.VarChar(20)
+  cardExpiryMonth   Int?
+  cardExpiryYear    Int?
+  
+  // Refund Information
+  refundAmount      Decimal         @default(0) @db.Decimal(10,2)
+  refundedAt        DateTime?       @db.Timestamptz
+  refundReason      String?         @db.Text
+  
+  // Processing Details
+  processingFee     Decimal         @default(0) @db.Decimal(10,2)
+  netAmount         Decimal?        @db.Decimal(10,2) // amount - processingFee
+  
+  // Failure Information
+  failureReason     String?         @db.Text
+  failedAt          DateTime?       @db.Timestamptz
+  retryCount        Int             @default(0)
+  
+  // Metadata
+  description       String?         @db.Text
+  reference         String?         @db.VarChar(255) // internal reference
+  notes             String?         @db.Text
+  
+  // Audit fields
+  createdAt         DateTime        @default(now()) @db.Timestamptz
+  updatedAt         DateTime        @updatedAt @db.Timestamptz
+  createdBy         String?         @db.VarChar(100)
+  updatedBy         String?         @db.VarChar(100)
+  version           Int             @default(1)
+  
+  // Relationships
+  guest             Guest           @relation(fields: [guestId], references: [id])
+  reservation       Reservation?    @relation(fields: [reservationId], references: [id])
+  ledgerEntries     LedgerEntry[]
+  
+  @@map("payments")
+  @@index([paymentNumber])
+  @@index([guestId])
+  @@index([reservationId])
+  @@index([status])
+  @@index([method])
+  @@index([createdAt])
+  @@index([transactionId])
+}
+
+// Partitioned table for high-volume financial transactions
+model LedgerEntry {
+  id                String            @id @default(cuid())
+  entryNumber       String            @unique @db.VarChar(50)
+  type              LedgerEntryType
+  
+  // Financial Details
+  amount            Decimal           @db.Decimal(15,2)
+  currency          String            @default("USD") @db.VarChar(3)
+  description       String            @db.VarChar(500)
+  
+  // Transaction Date (for partitioning)
+  transactionDate   DateTime          @db.Date
+  
+  // Related Entities
+  guestId           String?
+  reservationId     String?
+  paymentId         String?
+  
+  // Accounting Details
+  debitAccount      String            @db.VarChar(50)
+  creditAccount     String            @db.VarChar(50)
+  reference         String?           @db.VarChar(255)
+  
+  // Business Context
+  businessDate      DateTime          @db.Date // hotel business date
+  shiftId           String?           @db.VarChar(50)
+  locationId        String?           @db.VarChar(50)
+  departmentId      String?           @db.VarChar(50)
+  
+  // Tax Information
+  taxAmount         Decimal           @default(0) @db.Decimal(10,2)
+  taxRate           Decimal?          @db.Decimal(5,4)
+  taxCode           String?           @db.VarChar(10)
+  
+  // Reconciliation
+  isReconciled      Boolean           @default(false)
+  reconciledAt      DateTime?         @db.Timestamptz
+  reconciledBy      String?           @db.VarChar(100)
+  batchId           String?           @db.VarChar(50)
+  
+  // Reversal Information
+  isReversed        Boolean           @default(false)
+  reversedAt        DateTime?         @db.Timestamptz
+  reversalEntryId   String?           // references another LedgerEntry
+  reversalReason    String?           @db.Text
+  
+  // Metadata
+  metadata          Json?
+  notes             String?           @db.Text
+  externalId        String?           @db.VarChar(255)
+  
+  // Audit fields
+  createdAt         DateTime          @default(now()) @db.Timestamptz
+  updatedAt         DateTime          @updatedAt @db.Timestamptz
+  createdBy         String            @db.VarChar(100)
+  updatedBy         String?           @db.VarChar(100)
+  version           Int               @default(1)
+  
+  // Relationships
+  guest             Guest?            @relation(fields: [guestId], references: [id])
+  reservation       Reservation?      @relation(fields: [reservationId], references: [id])
+  payment           Payment?          @relation(fields: [paymentId], references: [id])
+  reversalEntry     LedgerEntry?      @relation("LedgerReversal", fields: [reversalEntryId], references: [id])
+  reversedBy        LedgerEntry?      @relation("LedgerReversal")
+  
+  @@map("ledger_entries")
+  @@index([entryNumber])
+  @@index([transactionDate]) // Important for partitioning
+  @@index([businessDate])
+  @@index([type])
+  @@index([guestId])
+  @@index([reservationId])
+  @@index([paymentId])
+  @@index([debitAccount])
+  @@index([creditAccount])
+  @@index([isReconciled])
+  @@index([createdAt])
+  @@index([batchId])
+}
+
+// Configuration Tables
+
+model ConfigurationParameter {
+  id                String            @id @default(cuid())
+  key               String            @unique @db.VarChar(255)
+  value             String            @db.Text
+  dataType          String            @default("string") @db.VarChar(20) // string, number, boolean, json
+  category          String            @db.VarChar(100) // policy, system, feature, etc.
+  description       String?           @db.Text
+  
+  // Source tracking
+  source            String            @default("manual") @db.VarChar(50) // manual, notion, api
+  sourceId          String?           @db.VarChar(255) // external source identifier
+  lastSyncAt        DateTime?         @db.Timestamptz
+  
+  // Validation
+  isActive          Boolean           @default(true)
+  validationRule    String?           @db.Text // JSON schema or regex for validation
+  
+  // Metadata
+  metadata          Json?
+  tags              String[]          @db.VarChar(50)[]
+  
+  // Audit fields
+  createdAt         DateTime          @default(now()) @db.Timestamptz
+  updatedAt         DateTime          @updatedAt @db.Timestamptz
+  createdBy         String?           @db.VarChar(100)
+  updatedBy         String?           @db.VarChar(100)
+  version           Int               @default(1)
+  
+  @@map("configuration_parameters")
+  @@index([key])
+  @@index([category])
+  @@index([source])
+  @@index([isActive])
+  @@index([lastSyncAt])
+}
+
+model PolicyRule {
+  id                String            @id @default(cuid())
+  name              String            @db.VarChar(255)
+  code              String            @unique @db.VarChar(100)
+  ruleType          String            @db.VarChar(50) // anti_abuse, ghost_booking, rate_limit, etc.
+  
+  // Rule Definition
+  condition         Json              // Rule conditions in JSON format
+  action            Json              // Actions to take when rule triggers
+  priority          Int               @default(100) // Lower number = higher priority
+  
+  // Thresholds and Limits
+  thresholds        Json?             // Configurable thresholds
+  cooldownMinutes   Int?              // Cooldown period before rule can trigger again
+  maxViolations     Int?              // Max violations before escalation
+  
+  // Status and Configuration
+  isActive          Boolean           @default(true)
+  isTestMode        Boolean           @default(false) // Log only, don't take action
+  
+  // Source tracking (synced from Notion)
+  source            String            @default("notion") @db.VarChar(50)
+  sourceId          String?           @db.VarChar(255) // Notion page/block ID
+  lastSyncAt        DateTime?         @db.Timestamptz
+  
+  // Metadata
+  description       String?           @db.Text
+  metadata          Json?
+  tags              String[]          @db.VarChar(50)[]
+  
+  // Audit fields
+  createdAt         DateTime          @default(now()) @db.Timestamptz
+  updatedAt         DateTime          @updatedAt @db.Timestamptz
+  createdBy         String?           @db.VarChar(100)
+  updatedBy         String?           @db.VarChar(100)
+  version           Int               @default(1)
+  
+  // Relationships
+  violations        PolicyViolation[]
+  
+  @@map("policy_rules")
+  @@index([code])
+  @@index([ruleType])
+  @@index([isActive])
+  @@index([priority])
+  @@index([lastSyncAt])
+}
+
+model PolicyViolation {
+  id                String            @id @default(cuid())
+  policyRuleId      String
+  
+  // Violation Details
+  entityType        String            @db.VarChar(50) // reservation, guest, payment
+  entityId          String            @db.VarChar(50)
+  violationType     String            @db.VarChar(100)
+  severity          String            @default("medium") @db.VarChar(20) // low, medium, high, critical
+  
+  // Violation Data
+  violationData     Json              // Details about what triggered the violation
+  context           Json?             // Additional context
+  
+  // Action Taken
+  actionTaken       String?           @db.VarChar(255)
+  actionResult      Json?             // Result of the action
+  isResolved        Boolean           @default(false)
+  resolvedAt        DateTime?         @db.Timestamptz
+  resolvedBy        String?           @db.VarChar(100)
+  
+  // Metadata
+  ipAddress         String?           @db.VarChar(45)
+  userAgent         String?           @db.VarChar(500)
+  sessionId         String?           @db.VarChar(100)
+  
+  // Audit fields
+  createdAt         DateTime          @default(now()) @db.Timestamptz
+  updatedAt         DateTime          @updatedAt @db.Timestamptz
+  
+  // Relationships
+  policyRule        PolicyRule        @relation(fields: [policyRuleId], references: [id])
+  
+  @@map("policy_violations")
+  @@index([policyRuleId])
+  @@index([entityType, entityId])
+  @@index([violationType])
+  @@index([severity])
+  @@index([createdAt])
+  @@index([isResolved])
+}
+
+// Audit Tables for tracking changes
+
+model AuditLog {
+  id                String            @id @default(cuid())
+  tableName         String            @db.VarChar(50)
+  recordId          String            @db.VarChar(50)
+  operation         String            @db.VarChar(10) // INSERT, UPDATE, DELETE
+  
+  // Change Details
+  oldValues         Json?
+  newValues         Json?
+  changedFields     String[]          @db.VarChar(100)[]
+  
+  // Context
+  userId            String?           @db.VarChar(100)
+  userAgent         String?           @db.VarChar(500)
+  ipAddress         String?           @db.VarChar(45)
+  sessionId         String?           @db.VarChar(100)
+  
+  // Timestamp
+  timestamp         DateTime          @default(now()) @db.Timestamptz
+  
+  @@map("audit_logs")
+  @@index([tableName, recordId])
+  @@index([timestamp])
+  @@index([userId])
+  @@index([operation])
+}

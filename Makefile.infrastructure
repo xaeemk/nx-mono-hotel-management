@@ -1,0 +1,176 @@
+# Infrastructure Management Makefile
+
+.PHONY: help dev-up dev-down dev-logs dev-clean prod-install prod-upgrade prod-uninstall prod-status
+
+# Default target
+help:
+	@echo "Infrastructure Management Commands:"
+	@echo ""
+	@echo "Development (Docker Compose):"
+	@echo "  dev-up          - Start all development services"
+	@echo "  dev-down        - Stop all development services"
+	@echo "  dev-logs        - View logs from all services"
+	@echo "  dev-clean       - Clean up volumes and images"
+	@echo "  dev-rebuild     - Rebuild and restart all services"
+	@echo ""
+	@echo "Production (Kubernetes/Helm):"
+	@echo "  prod-deps       - Add required Helm repositories"
+	@echo "  prod-install    - Install infrastructure in Kubernetes"
+	@echo "  prod-upgrade    - Upgrade existing infrastructure"
+	@echo "  prod-uninstall  - Remove infrastructure from Kubernetes"
+	@echo "  prod-status     - Check infrastructure status"
+	@echo ""
+	@echo "Utilities:"
+	@echo "  lint-helm       - Lint Helm charts"
+	@echo "  test-compose    - Test Docker Compose configuration"
+	@echo "  docs            - Open infrastructure documentation"
+
+# Development Commands (Docker Compose)
+dev-up:
+	@echo "Starting development infrastructure..."
+	docker-compose up -d
+	@echo "Services starting up. Access points:"
+	@echo "  - Main App: http://localhost:3000"
+	@echo "  - Grafana: http://localhost:3002 (admin/admin)"
+	@echo "  - Prometheus: http://localhost:9090"
+	@echo "  - Jaeger: http://localhost:16686"
+	@echo "  - BullMQ UI: http://localhost:3001"
+	@echo "  - MCP Hub: http://localhost:8080"
+
+dev-down:
+	@echo "Stopping development infrastructure..."
+	docker-compose down
+
+dev-logs:
+	@echo "Showing logs from all services..."
+	docker-compose logs -f
+
+dev-clean:
+	@echo "Cleaning up Docker resources..."
+	docker-compose down -v
+	docker system prune -f
+
+dev-rebuild:
+	@echo "Rebuilding and restarting services..."
+	docker-compose down
+	docker-compose build --no-cache
+	docker-compose up -d
+
+test-compose:
+	@echo "Testing Docker Compose configuration..."
+	docker-compose config
+
+# Production Commands (Kubernetes/Helm)
+prod-deps:
+	@echo "Adding required Helm repositories..."
+	helm repo add bitnami https://charts.bitnami.com/bitnami
+	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+	helm repo add grafana https://grafana.github.io/helm-charts
+	helm repo update
+
+prod-install: prod-deps
+	@echo "Installing infrastructure dependencies..."
+	helm dependency update helm/nx-mono-infrastructure/
+	@echo "Installing infrastructure in Kubernetes..."
+	helm install nx-infra helm/nx-mono-infrastructure/ \
+		--namespace infrastructure \
+		--create-namespace \
+		--values helm/nx-mono-infrastructure/values.yaml
+	@echo "Infrastructure installed. Check status with: make prod-status"
+
+prod-upgrade:
+	@echo "Upgrading infrastructure..."
+	helm dependency update helm/nx-mono-infrastructure/
+	helm upgrade nx-infra helm/nx-mono-infrastructure/ \
+		--namespace infrastructure \
+		--values helm/nx-mono-infrastructure/values.yaml
+
+prod-uninstall:
+	@echo "Uninstalling infrastructure..."
+	helm uninstall nx-infra -n infrastructure
+	kubectl delete namespace infrastructure
+
+prod-status:
+	@echo "Infrastructure Status:"
+	@echo "====================="
+	helm status nx-infra -n infrastructure
+	@echo ""
+	@echo "Pods Status:"
+	@echo "============"
+	kubectl get pods -n infrastructure
+	@echo ""
+	@echo "Services Status:"
+	@echo "==============="
+	kubectl get services -n infrastructure
+
+# Utilities
+lint-helm:
+	@echo "Linting Helm charts..."
+	helm lint helm/nx-mono-infrastructure/
+
+docs:
+	@echo "Opening infrastructure documentation..."
+	@if command -v open >/dev/null 2>&1; then \
+		open docs/INFRASTRUCTURE.md; \
+	elif command -v xdg-open >/dev/null 2>&1; then \
+		xdg-open docs/INFRASTRUCTURE.md; \
+	else \
+		echo "Please open docs/INFRASTRUCTURE.md manually"; \
+	fi
+
+# Port forwarding for production access
+prod-forward-grafana:
+	@echo "Forwarding Grafana port (http://localhost:3000)..."
+	kubectl port-forward svc/nx-infra-grafana 3000:3000 -n infrastructure
+
+prod-forward-prometheus:
+	@echo "Forwarding Prometheus port (http://localhost:9090)..."
+	kubectl port-forward svc/nx-infra-prometheus-server 9090:80 -n infrastructure
+
+prod-forward-jaeger:
+	@echo "Forwarding Jaeger port (http://localhost:16686)..."
+	kubectl port-forward svc/nx-infra-jaeger 16686:16686 -n infrastructure
+
+prod-forward-mcp:
+	@echo "Forwarding MCP Hub port (http://localhost:8080)..."
+	kubectl port-forward svc/nx-infra-mcp-hub 8080:8080 -n infrastructure
+
+# Debug commands
+dev-debug:
+	@echo "Development Debug Information:"
+	@echo "============================="
+	@echo "Container Status:"
+	docker-compose ps
+	@echo ""
+	@echo "Network Information:"
+	docker network ls | grep nx-mono
+	@echo ""
+	@echo "Volume Information:"
+	docker volume ls | grep nx-mono
+
+prod-debug:
+	@echo "Production Debug Information:"
+	@echo "============================"
+	@echo "Namespace Resources:"
+	kubectl get all -n infrastructure
+	@echo ""
+	@echo "ConfigMaps:"
+	kubectl get configmaps -n infrastructure
+	@echo ""
+	@echo "Secrets:"
+	kubectl get secrets -n infrastructure
+	@echo ""
+	@echo "Persistent Volumes:"
+	kubectl get pv | grep infrastructure
+
+# Health checks
+health-check:
+	@echo "Performing health checks..."
+	@echo "Testing MCP Hub:"
+	@curl -s http://localhost:8080/health | jq . || echo "MCP Hub not responding"
+	@echo ""
+	@echo "Testing Prometheus:"
+	@curl -s http://localhost:9090/-/healthy || echo "Prometheus not responding"
+	@echo ""
+	@echo "Testing Grafana:"
+	@curl -s http://localhost:3002/api/health | jq . || echo "Grafana not responding"

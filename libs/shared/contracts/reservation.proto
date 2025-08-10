@@ -1,0 +1,94 @@
+syntax = "proto3";
+
+package reservation;
+
+service ReservationService {
+  rpc CreateReservation(CreateReservationRequest) returns (CreateReservationResponse);
+  rpc UpdateReservationStatus(UpdateReservationStatusRequest) returns (UpdateReservationStatusResponse);
+  rpc GetReservation(GetReservationRequest) returns (GetReservationResponse);
+  rpc CancelReservation(CancelReservationRequest) returns (CancelReservationResponse);
+  rpc ListReservations(ListReservationsRequest) returns (ListReservationsResponse);
+}
+
+message CreateReservationRequest {
+  string customer_id = 1;
+  string service_id = 2;
+  int64 start_time = 3;
+  int64 end_time = 4;
+  double amount = 5;
+  string currency = 6;
+  map<string, string> metadata = 7;
+}
+
+message CreateReservationResponse {
+  string reservation_id = 1;
+  ReservationStatus status = 2;
+  string error_message = 3;
+}
+
+message UpdateReservationStatusRequest {
+  string reservation_id = 1;
+  ReservationStatus status = 2;
+  string payment_id = 3;
+  map<string, string> metadata = 4;
+}
+
+message UpdateReservationStatusResponse {
+  string reservation_id = 1;
+  ReservationStatus status = 2;
+  string error_message = 3;
+}
+
+message GetReservationRequest {
+  string reservation_id = 1;
+}
+
+message GetReservationResponse {
+  string reservation_id = 1;
+  string customer_id = 2;
+  string service_id = 3;
+  ReservationStatus status = 4;
+  int64 start_time = 5;
+  int64 end_time = 6;
+  double amount = 7;
+  string currency = 8;
+  string payment_id = 9;
+  int64 created_at = 10;
+  int64 updated_at = 11;
+  map<string, string> metadata = 12;
+}
+
+message CancelReservationRequest {
+  string reservation_id = 1;
+  string reason = 2;
+}
+
+message CancelReservationResponse {
+  string reservation_id = 1;
+  ReservationStatus status = 2;
+  string error_message = 3;
+}
+
+message ListReservationsRequest {
+  string customer_id = 1;
+  ReservationStatus status = 2;
+  int32 page = 3;
+  int32 limit = 4;
+}
+
+message ListReservationsResponse {
+  repeated GetReservationResponse reservations = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 limit = 4;
+}
+
+enum ReservationStatus {
+  REQUESTED = 0;
+  PAYMENT_PENDING = 1;
+  PAYMENT_CONFIRMED = 2;
+  BOOKING_CONFIRMED = 3;
+  CANCELLED = 4;
+  COMPLETED = 5;
+  REFUNDED = 6;
+}

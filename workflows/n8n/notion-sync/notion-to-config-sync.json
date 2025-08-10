@@ -1,0 +1,303 @@
+{
+  "meta": {
+    "instanceId": "policy-store-sync"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "8f4f5c7d-0b6d-4d9a-8b1c-2e3f4a5b6c7d",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "resource": "database",
+        "operation": "getAll",
+        "databaseId": "={{ $env.NOTION_POLICY_DATABASE_ID }}",
+        "simplifyOutput": false,
+        "options": {
+          "sort": [
+            {
+              "key": "Last edited time",
+              "direction": "descending"
+            }
+          ]
+        }
+      },
+      "id": "9a5b6c7d-1c6e-4e0b-9c2d-3f4g5h6i7j8k",
+      "name": "Get Notion Policy Database",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [460, 300],
+      "credentials": {
+        "notionApi": {
+          "id": "{{ $env.NOTION_API_CREDENTIAL_ID }}",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Transform Notion pages to configuration parameters\nconst items = [];\n\nfor (const item of $input.all()) {\n  const page = item.json;\n  \n  // Extract properties from Notion page\n  const key = page.properties?.Key?.title?.[0]?.plain_text;\n  const value = page.properties?.Value?.rich_text?.[0]?.plain_text;\n  const category = page.properties?.Category?.select?.name;\n  const description = page.properties?.Description?.rich_text?.[0]?.plain_text;\n  const dataType = page.properties?.DataType?.select?.name || 'string';\n  const isActive = page.properties?.Active?.checkbox || true;\n  const tags = page.properties?.Tags?.multi_select?.map(tag => tag.name) || [];\n  \n  if (key && value) {\n    items.push({\n      json: {\n        key,\n        value,\n        dataType,\n        category: category || 'policy',\n        description,\n        source: 'notion',\n        sourceId: page.id,\n        isActive,\n        tags,\n        lastSyncAt: new Date().toISOString(),\n        metadata: {\n          notionUrl: page.url,\n          lastEditedTime: page.last_edited_time,\n          createdTime: page.created_time\n        }\n      }\n    });\n  }\n}\n\nreturn items;"
+      },
+      "id": "ab6c7d8e-2d7f-4f1c-ad3e-4g5h6i7j8k9l",
+      "name": "Transform Notion Data",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Upsert configuration parameters from Notion\nINSERT INTO configuration_parameters (\n  key, value, data_type, category, description, source, source_id, \n  is_active, tags, last_sync_at, metadata, created_by, updated_by\n)\nVALUES \n{{ $json.key ? `('${$json.key}', '${$json.value}', '${$json.dataType}', '${$json.category}', '${$json.description || ''}', 'notion', '${$json.sourceId}', ${$json.isActive}, ARRAY[${$json.tags.map(tag => `'${tag}'`).join(',')}], '${$json.lastSyncAt}', '${JSON.stringify($json.metadata)}', 'n8n-sync', 'n8n-sync')` : 'SELECT 1' }}\nON CONFLICT (key) \nDO UPDATE SET \n  value = EXCLUDED.value,\n  data_type = EXCLUDED.data_type,\n  category = EXCLUDED.category,\n  description = EXCLUDED.description,\n  source_id = EXCLUDED.source_id,\n  is_active = EXCLUDED.is_active,\n  tags = EXCLUDED.tags,\n  last_sync_at = EXCLUDED.last_sync_at,\n  metadata = EXCLUDED.metadata,\n  updated_by = 'n8n-sync',\n  updated_at = NOW(),\n  version = configuration_parameters.version + 1\nWHERE configuration_parameters.source = 'notion';",
+        "options": {}
+      },
+      "id": "bc7d8e9f-3e8g-4g2d-be4f-5h6i7j8k9l0m",
+      "name": "Upsert to Database",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [900, 300],
+      "credentials": {
+        "postgres": {
+          "id": "{{ $env.POSTGRES_CREDENTIAL_ID }}",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "database",
+        "operation": "getAll",
+        "databaseId": "={{ $env.NOTION_POLICY_RULES_DATABASE_ID }}",
+        "simplifyOutput": false
+      },
+      "id": "cd8e9f0g-4f9h-4h3e-cf5g-6i7j8k9l0m1n",
+      "name": "Get Policy Rules from Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [460, 480],
+      "credentials": {
+        "notionApi": {
+          "id": "{{ $env.NOTION_API_CREDENTIAL_ID }}",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Transform Notion policy rules\nconst items = [];\n\nfor (const item of $input.all()) {\n  const page = item.json;\n  \n  const name = page.properties?.Name?.title?.[0]?.plain_text;\n  const code = page.properties?.Code?.rich_text?.[0]?.plain_text;\n  const ruleType = page.properties?.RuleType?.select?.name;\n  const isActive = page.properties?.Active?.checkbox || true;\n  const isTestMode = page.properties?.TestMode?.checkbox || false;\n  const priority = page.properties?.Priority?.number || 100;\n  const description = page.properties?.Description?.rich_text?.[0]?.plain_text;\n  \n  // Parse condition and action from Notion\n  const conditionText = page.properties?.Condition?.rich_text?.[0]?.plain_text;\n  const actionText = page.properties?.Action?.rich_text?.[0]?.plain_text;\n  const thresholdsText = page.properties?.Thresholds?.rich_text?.[0]?.plain_text;\n  \n  let condition, action, thresholds;\n  try {\n    condition = conditionText ? JSON.parse(conditionText) : {};\n    action = actionText ? JSON.parse(actionText) : {};\n    thresholds = thresholdsText ? JSON.parse(thresholdsText) : {};\n  } catch (e) {\n    console.log(`Error parsing JSON for rule ${code}:`, e);\n    continue;\n  }\n  \n  const cooldownMinutes = page.properties?.CooldownMinutes?.number;\n  const maxViolations = page.properties?.MaxViolations?.number;\n  const tags = page.properties?.Tags?.multi_select?.map(tag => tag.name) || [];\n  \n  if (name && code && ruleType) {\n    items.push({\n      json: {\n        name,\n        code,\n        ruleType,\n        condition,\n        action,\n        priority,\n        thresholds,\n        cooldownMinutes,\n        maxViolations,\n        isActive,\n        isTestMode,\n        source: 'notion',\n        sourceId: page.id,\n        description,\n        tags,\n        lastSyncAt: new Date().toISOString(),\n        metadata: {\n          notionUrl: page.url,\n          lastEditedTime: page.last_edited_time,\n          createdTime: page.created_time\n        }\n      }\n    });\n  }\n}\n\nreturn items;"
+      },
+      "id": "de9f0g1h-5g0i-4i4f-dg6h-7j8k9l0m1n2o",
+      "name": "Transform Policy Rules",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [680, 480]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Upsert policy rules from Notion\nINSERT INTO policy_rules (\n  name, code, rule_type, condition, action, priority, thresholds,\n  cooldown_minutes, max_violations, is_active, is_test_mode,\n  source, source_id, description, tags, last_sync_at, metadata,\n  created_by, updated_by\n)\nVALUES (\n  '{{ $json.name }}',\n  '{{ $json.code }}',\n  '{{ $json.ruleType }}',\n  '{{ JSON.stringify($json.condition) }}',\n  '{{ JSON.stringify($json.action) }}',\n  {{ $json.priority }},\n  {{ $json.thresholds ? `'${JSON.stringify($json.thresholds)}'` : 'NULL' }},\n  {{ $json.cooldownMinutes || 'NULL' }},\n  {{ $json.maxViolations || 'NULL' }},\n  {{ $json.isActive }},\n  {{ $json.isTestMode }},\n  'notion',\n  '{{ $json.sourceId }}',\n  {{ $json.description ? `'${$json.description}'` : 'NULL' }},\n  ARRAY[{{ $json.tags.map(tag => `'${tag}'`).join(',') }}],\n  '{{ $json.lastSyncAt }}',\n  '{{ JSON.stringify($json.metadata) }}',\n  'n8n-sync',\n  'n8n-sync'\n)\nON CONFLICT (code)\nDO UPDATE SET\n  name = EXCLUDED.name,\n  rule_type = EXCLUDED.rule_type,\n  condition = EXCLUDED.condition,\n  action = EXCLUDED.action,\n  priority = EXCLUDED.priority,\n  thresholds = EXCLUDED.thresholds,\n  cooldown_minutes = EXCLUDED.cooldown_minutes,\n  max_violations = EXCLUDED.max_violations,\n  is_active = EXCLUDED.is_active,\n  is_test_mode = EXCLUDED.is_test_mode,\n  source_id = EXCLUDED.source_id,\n  description = EXCLUDED.description,\n  tags = EXCLUDED.tags,\n  last_sync_at = EXCLUDED.last_sync_at,\n  metadata = EXCLUDED.metadata,\n  updated_by = 'n8n-sync',\n  updated_at = NOW(),\n  version = policy_rules.version + 1\nWHERE policy_rules.source = 'notion';",
+        "options": {}
+      },
+      "id": "ef0g1h2i-6h1j-4j5g-eh7i-8k9l0m1n2o3p",
+      "name": "Upsert Policy Rules",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [900, 480],
+      "credentials": {
+        "postgres": {
+          "id": "{{ $env.POSTGRES_CREDENTIAL_ID }}",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "error_check",
+              "leftValue": "={{ $('Upsert to Database').item.json.error || $('Upsert Policy Rules').item.json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "exists",
+                "rightType": "any"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "f01h2i3j-7i2k-4k6h-fi8j-9l0m1n2o3p4q",
+      "name": "Check for Errors",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 390]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"text\": \"⚠️ Policy Store Sync Error\",\n  \"blocks\": [\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"*Policy Store Sync Failed*\\n\\nError occurred while syncing Notion database to configuration table.\\n\\n*Time:* {{ new Date().toISOString() }}\\n*Error:* {{ $('Upsert to Database').item.json.error || $('Upsert Policy Rules').item.json.error }}\"\n      }\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "g12i3j4k-8j3l-4l7i-gj9k-0m1n2o3p4q5r",
+      "name": "Send Error Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"text\": \"✅ Policy Store Sync Success\",\n  \"blocks\": [\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"*Policy Store Sync Completed*\\n\\nSuccessfully synced Notion database to configuration table.\\n\\n*Time:* {{ new Date().toISOString() }}\\n*Config Parameters:* {{ $('Transform Notion Data').all().length }}\\n*Policy Rules:* {{ $('Transform Policy Rules').all().length }}\"\n      }\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "h23j4k5l-9k4m-4m8j-hk0l-1n2o3p4q5r6s",
+      "name": "Send Success Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 480]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Notion Policy Database",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Policy Rules from Notion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Notion Policy Database": {
+      "main": [
+        [
+          {
+            "node": "Transform Notion Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transform Notion Data": {
+      "main": [
+        [
+          {
+            "node": "Upsert to Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert to Database": {
+      "main": [
+        [
+          {
+            "node": "Check for Errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Policy Rules from Notion": {
+      "main": [
+        [
+          {
+            "node": "Transform Policy Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transform Policy Rules": {
+      "main": [
+        [
+          {
+            "node": "Upsert Policy Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Policy Rules": {
+      "main": [
+        [
+          {
+            "node": "Check for Errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check for Errors": {
+      "main": [
+        [
+          {
+            "node": "Send Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Success Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "id": "policy-sync",
+      "name": "Policy Sync"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2024-08-10T15:30:00.000Z",
+  "versionId": "001"
+}

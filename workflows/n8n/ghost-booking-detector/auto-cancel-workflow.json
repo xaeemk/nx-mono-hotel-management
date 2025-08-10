@@ -1,0 +1,317 @@
+{
+  "meta": {
+    "instanceId": "ghost-booking-auto-cancel"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "trigger-ghost-booking-check",
+      "name": "Schedule Ghost Booking Check",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Find policy violations that need auto-cancel action\nSELECT \n  pv.id as violation_id,\n  pv.entity_id as reservation_id,\n  pv.violation_type,\n  pv.severity,\n  pv.violation_data,\n  pv.created_at,\n  r.reservation_number,\n  r.status as reservation_status,\n  r.booked_at,\n  r.total_amount,\n  g.email as guest_email,\n  g.first_name,\n  g.last_name\nFROM policy_violations pv\nJOIN policy_rules pr ON pv.policy_rule_id = pr.id\nJOIN reservations r ON pv.entity_id = r.id\nJOIN guests g ON r.guest_id = g.id\nWHERE \n  pr.code = 'ghost_booking_detector'\n  AND pv.is_resolved = false\n  AND pv.severity IN ('high', 'critical')\n  AND r.status = 'PENDING'\n  AND pv.violation_type = 'hold_timeout'\n  AND pv.created_at >= NOW() - INTERVAL '1 hour'\nORDER BY pv.severity DESC, pv.created_at ASC\nLIMIT 50;",
+        "options": {}
+      },
+      "id": "query-ghost-bookings",
+      "name": "Query Ghost Bookings for Auto-Cancel",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [460, 300],
+      "credentials": {
+        "postgres": {
+          "id": "{{ $env.POSTGRES_CREDENTIAL_ID }}",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has_violations",
+              "leftValue": "={{ $json.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "check-violations-exist",
+      "name": "Check if Violations Exist",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Process each ghost booking violation for auto-cancellation\nconst items = [];\n\nfor (const violation of $input.all()) {\n  const data = violation.json;\n  \n  // Calculate hold duration\n  const bookedAt = new Date(data.booked_at);\n  const now = new Date();\n  const holdHours = Math.floor((now.getTime() - bookedAt.getTime()) / (1000 * 60 * 60));\n  \n  // Parse violation data\n  const violationData = typeof data.violation_data === 'string' \n    ? JSON.parse(data.violation_data) \n    : data.violation_data;\n  \n  // Determine if auto-cancel should proceed\n  const shouldAutoCancel = (\n    data.severity === 'critical' ||\n    (data.severity === 'high' && holdHours > 2) ||\n    (violationData.failedPaymentAttempts && violationData.failedPaymentAttempts > 2)\n  );\n  \n  if (shouldAutoCancel) {\n    items.push({\n      json: {\n        violationId: data.violation_id,\n        reservationId: data.reservation_id,\n        reservationNumber: data.reservation_number,\n        violationType: data.violation_type,\n        severity: data.severity,\n        holdHours,\n        guestEmail: data.guest_email,\n        guestName: `${data.first_name} ${data.last_name}`,\n        totalAmount: data.total_amount,\n        cancellationReason: `Auto-cancelled: ${data.violation_type} - held for ${holdHours} hours without payment`,\n        violationData: violationData\n      }\n    });\n  }\n}\n\nconsole.log(`Processing ${items.length} reservations for auto-cancellation`);\nreturn items;"
+      },
+      "id": "process-violations",
+      "name": "Process Violations for Auto-Cancel",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Auto-cancel the reservation\nBEGIN;\n\n-- Update reservation status\nUPDATE reservations \nSET \n  status = 'CANCELLED',\n  cancelled_at = NOW(),\n  cancelled_by = 'ghost-booking-detector',\n  cancellation_reason = '{{ $json.cancellationReason }}',\n  updated_at = NOW(),\n  version = version + 1\nWHERE \n  id = '{{ $json.reservationId }}'\n  AND status = 'PENDING';\n\n-- Release the room (if it was reserved)\nUPDATE rooms \nSET \n  status = 'AVAILABLE',\n  updated_at = NOW(),\n  version = version + 1\nWHERE \n  id = (SELECT room_id FROM reservations WHERE id = '{{ $json.reservationId }}')\n  AND status = 'RESERVED';\n\n-- Mark violation as resolved\nUPDATE policy_violations \nSET \n  is_resolved = true,\n  resolved_at = NOW(),\n  resolved_by = 'ghost-booking-detector',\n  action_taken = 'auto_cancelled',\n  action_result = jsonb_build_object(\n    'success', true,\n    'reason', '{{ $json.cancellationReason }}',\n    'cancelled_at', NOW()\n  ),\n  updated_at = NOW()\nWHERE \n  id = {{ $json.violationId }}\n  AND is_resolved = false;\n\nCOMMIT;\n\n-- Return cancellation details\nSELECT \n  '{{ $json.reservationId }}' as reservation_id,\n  '{{ $json.reservationNumber }}' as reservation_number,\n  '{{ $json.guestEmail }}' as guest_email,\n  'cancelled' as status;",
+        "options": {}
+      },
+      "id": "execute-auto-cancel",
+      "name": "Execute Auto Cancel",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1120, 300],
+      "credentials": {
+        "postgres": {
+          "id": "{{ $env.POSTGRES_CREDENTIAL_ID }}",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{ $env.NOTIFICATION_SERVICE_URL }}/api/v1/notifications/send",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"type\": \"reservation_cancelled\",\n  \"recipient\": {\n    \"email\": \"{{ $('Process Violations for Auto-Cancel').item.json.guestEmail }}\",\n    \"name\": \"{{ $('Process Violations for Auto-Cancel').item.json.guestName }}\"\n  },\n  \"templateData\": {\n    \"reservationNumber\": \"{{ $('Process Violations for Auto-Cancel').item.json.reservationNumber }}\",\n    \"cancellationReason\": \"Payment not completed within the required timeframe\",\n    \"refundInfo\": \"No charges were applied to your payment method\",\n    \"rebookUrl\": \"{{ $env.BOOKING_URL }}\"\n  },\n  \"priority\": \"high\",\n  \"channels\": [\"email\"]\n}",
+        "options": {}
+      },
+      "id": "send-guest-notification",
+      "name": "Send Guest Cancellation Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"text\": \"🤖 Ghost Booking Auto-Cancelled\",\n  \"blocks\": [\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"*Ghost Booking Auto-Cancelled*\\n\\n*Reservation:* {{ $('Process Violations for Auto-Cancel').item.json.reservationNumber }}\\n*Guest:* {{ $('Process Violations for Auto-Cancel').item.json.guestName }} ({{ $('Process Violations for Auto-Cancel').item.json.guestEmail }})\\n*Amount:* ${{ $('Process Violations for Auto-Cancel').item.json.totalAmount }}\\n*Hold Duration:* {{ $('Process Violations for Auto-Cancel').item.json.holdHours }} hours\\n*Severity:* {{ $('Process Violations for Auto-Cancel').item.json.severity }}\\n*Reason:* {{ $('Process Violations for Auto-Cancel').item.json.cancellationReason }}\"\n      }\n    },\n    {\n      \"type\": \"context\",\n      \"elements\": [\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"Time: {{ new Date().toISOString() }} | Violation ID: {{ $('Process Violations for Auto-Cancel').item.json.violationId }}\"\n        }\n      ]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "send-slack-alert",
+      "name": "Send Slack Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 400]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Aggregate cancellation results\nconst results = $input.all();\nconst successful = results.filter(r => r.json.status === 'cancelled');\nconst failed = results.filter(r => r.json.status !== 'cancelled');\n\nreturn [{\n  json: {\n    totalProcessed: results.length,\n    successfulCancellations: successful.length,\n    failedCancellations: failed.length,\n    timestamp: new Date().toISOString(),\n    details: {\n      successful: successful.map(r => ({\n        reservationId: r.json.reservation_id,\n        reservationNumber: r.json.reservation_number,\n        guestEmail: r.json.guest_email\n      })),\n      failed: failed.map(r => ({\n        reservationId: r.json.reservation_id,\n        error: r.json.error || 'Unknown error'\n      }))\n    }\n  }\n}];"
+      },
+      "id": "aggregate-results",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Log auto-cancellation batch summary\nINSERT INTO audit_logs (\n  table_name,\n  record_id,\n  operation,\n  new_values,\n  user_id,\n  timestamp\n)\nVALUES (\n  'policy_violations',\n  'ghost_booking_batch',\n  'AUTO_CANCEL',\n  '{{ JSON.stringify($json) }}',\n  'ghost-booking-detector',\n  NOW()\n);",
+        "options": {}
+      },
+      "id": "log-batch-summary",
+      "name": "Log Batch Summary",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1780, 300],
+      "credentials": {
+        "postgres": {
+          "id": "{{ $env.POSTGRES_CREDENTIAL_ID }}",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"text\": \"📊 Ghost Booking Auto-Cancel Summary\",\n  \"blocks\": [\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"*Ghost Booking Auto-Cancel Batch Completed*\\n\\n*Total Processed:* {{ $json.totalProcessed }}\\n*Successful:* {{ $json.successfulCancellations }}\\n*Failed:* {{ $json.failedCancellations }}\\n*Time:* {{ $json.timestamp }}\"\n      }\n    }\n  ]\n}",
+        "options": {},
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has_cancellations",
+              "leftValue": "={{ $json.totalProcessed }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        }
+      },
+      "id": "send-summary-alert",
+      "name": "Send Summary Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{ $env.ANALYTICS_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"event\": \"ghost_booking_auto_cancel_batch\",\n  \"properties\": {\n    \"total_processed\": {{ $json.totalProcessed }},\n    \"successful_cancellations\": {{ $json.successfulCancellations }},\n    \"failed_cancellations\": {{ $json.failedCancellations }},\n    \"timestamp\": \"{{ $json.timestamp }}\",\n    \"workflow\": \"n8n_ghost_booking_detector\"\n  },\n  \"timestamp\": \"{{ $json.timestamp }}\"\n}",
+        "options": {}
+      },
+      "id": "send-analytics-event",
+      "name": "Send Analytics Event",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 400]
+    }
+  ],
+  "connections": {
+    "Schedule Ghost Booking Check": {
+      "main": [
+        [
+          {
+            "node": "Query Ghost Bookings for Auto-Cancel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Ghost Bookings for Auto-Cancel": {
+      "main": [
+        [
+          {
+            "node": "Check if Violations Exist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if Violations Exist": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Process Violations for Auto-Cancel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Violations for Auto-Cancel": {
+      "main": [
+        [
+          {
+            "node": "Execute Auto Cancel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Auto Cancel": {
+      "main": [
+        [
+          {
+            "node": "Send Guest Cancellation Notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Slack Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Log Batch Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Batch Summary": {
+      "main": [
+        [
+          {
+            "node": "Send Summary Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Analytics Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "id": "ghost-booking",
+      "name": "Ghost Booking"
+    },
+    {
+      "id": "auto-cancel",
+      "name": "Auto Cancel"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2024-08-10T15:45:00.000Z",
+  "versionId": "001"
+}

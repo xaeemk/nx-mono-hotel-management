@@ -1,0 +1,105 @@
+syntax = "proto3";
+
+package notification;
+
+service NotificationService {
+  rpc SendSMS(SendSMSRequest) returns (SendSMSResponse);
+  rpc SendWhatsApp(SendWhatsAppRequest) returns (SendWhatsAppResponse);
+  rpc SendEmail(SendEmailRequest) returns (SendEmailResponse);
+  rpc GetDeliveryStatus(GetDeliveryStatusRequest) returns (GetDeliveryStatusResponse);
+  rpc SubscribeToEvents(SubscribeToEventsRequest) returns (SubscribeToEventsResponse);
+}
+
+message SendSMSRequest {
+  string to = 1;
+  string from = 2;
+  string body = 3;
+  string template_id = 4;
+  map<string, string> template_data = 5;
+  map<string, string> metadata = 6;
+}
+
+message SendSMSResponse {
+  string message_id = 1;
+  DeliveryStatus status = 2;
+  string error_message = 3;
+}
+
+message SendWhatsAppRequest {
+  string to = 1;
+  string from = 2;
+  string body = 3;
+  string template_id = 4;
+  map<string, string> template_data = 5;
+  repeated MediaAttachment media = 6;
+  map<string, string> metadata = 7;
+}
+
+message SendWhatsAppResponse {
+  string message_id = 1;
+  DeliveryStatus status = 2;
+  string error_message = 3;
+}
+
+message SendEmailRequest {
+  string to = 1;
+  string from = 2;
+  string subject = 3;
+  string body = 4;
+  string template_id = 5;
+  map<string, string> template_data = 6;
+  repeated MediaAttachment attachments = 7;
+  map<string, string> metadata = 8;
+}
+
+message SendEmailResponse {
+  string message_id = 1;
+  DeliveryStatus status = 2;
+  string error_message = 3;
+}
+
+message GetDeliveryStatusRequest {
+  string message_id = 1;
+}
+
+message GetDeliveryStatusResponse {
+  string message_id = 1;
+  DeliveryStatus status = 2;
+  int64 sent_at = 3;
+  int64 delivered_at = 4;
+  string error_message = 5;
+}
+
+message SubscribeToEventsRequest {
+  repeated EventType events = 1;
+  string webhook_url = 2;
+}
+
+message SubscribeToEventsResponse {
+  string subscription_id = 1;
+  string error_message = 2;
+}
+
+message MediaAttachment {
+  string url = 1;
+  string content_type = 2;
+  string filename = 3;
+}
+
+enum DeliveryStatus {
+  QUEUED = 0;
+  SENT = 1;
+  DELIVERED = 2;
+  FAILED = 3;
+  UNDELIVERED = 4;
+}
+
+enum EventType {
+  PAYMENT_INITIATED = 0;
+  PAYMENT_CONFIRMED = 1;
+  PAYMENT_FAILED = 2;
+  RESERVATION_CREATED = 3;
+  RESERVATION_CONFIRMED = 4;
+  RESERVATION_CANCELLED = 5;
+  BOOKING_CONFIRMED = 6;
+}

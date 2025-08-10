@@ -1,0 +1,372 @@
+{
+  "meta": {
+    "instanceId": "voice-rate-availability-sync"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "rate-sync-trigger",
+      "name": "Rate Sync Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "{{ $env.VOICE_SERVICE_URL }}/api/v1/voice/sessions",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "status",
+              "value": "completed"
+            },
+            {
+              "name": "limit",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-recent-calls",
+      "name": "Fetch Recent Voice Calls",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Extract availability requests from voice call data\nconst availabilityRequests = [];\n\nfor (const call of $input.all()) {\n  const callData = call.json;\n  \n  if (!callData.sessions) continue;\n  \n  for (const session of callData.sessions) {\n    if (!session.conversationHistory) continue;\n    \n    // Look for availability-related intents\n    for (const interaction of session.conversationHistory) {\n      if (interaction.intent === 'check_availability' || \n          interaction.intent === 'make_reservation') {\n        \n        const parameters = interaction.parameters || {};\n        \n        if (parameters.dates && parameters.dates.check_in) {\n          availabilityRequests.push({\n            json: {\n              callSid: session.callSid,\n              phoneNumber: session.phoneNumber,\n              checkIn: parameters.dates.check_in,\n              checkOut: parameters.dates.check_out,\n              guests: parameters.guest_info?.adults || 1,\n              roomType: parameters.room_preferences?.type,\n              intent: interaction.intent,\n              timestamp: interaction.timestamp,\n              confidence: interaction.confidence || 0\n            }\n          });\n        }\n      }\n    }\n  }\n}\n\nconsole.log(`Found ${availabilityRequests.length} availability requests`);\nreturn availabilityRequests;"
+      },
+      "id": "extract-availability-requests",
+      "name": "Extract Availability Requests",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has_requests",
+              "leftValue": "={{ $json.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "check-has-requests",
+      "name": "Check Has Requests",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "{{ $env.RESERVATION_SERVICE_URL }}/api/v1/availability",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "checkIn",
+              "value": "={{ $json.checkIn }}"
+            },
+            {
+              "name": "checkOut",
+              "value": "={{ $json.checkOut }}"
+            },
+            {
+              "name": "guests",
+              "value": "={{ $json.guests }}"
+            },
+            {
+              "name": "roomType",
+              "value": "={{ $json.roomType }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "check-current-availability",
+      "name": "Check Current Availability",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "{{ $env.PRICING_SERVICE_URL }}/api/v1/rates",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "startDate",
+              "value": "={{ $('Extract Availability Requests').item.json.checkIn }}"
+            },
+            {
+              "name": "endDate",
+              "value": "={{ $('Extract Availability Requests').item.json.checkOut }}"
+            },
+            {
+              "name": "roomType",
+              "value": "={{ $('Extract Availability Requests').item.json.roomType }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-current-rates",
+      "name": "Fetch Current Rates",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Combine availability and rate data with voice call context\nconst availabilityData = $('Check Current Availability').first().json;\nconst rateData = $('Fetch Current Rates').first().json;\nconst originalRequest = $('Extract Availability Requests').item.json;\n\nconst enrichedData = {\n  callSid: originalRequest.callSid,\n  phoneNumber: originalRequest.phoneNumber,\n  requestedDates: {\n    checkIn: originalRequest.checkIn,\n    checkOut: originalRequest.checkOut\n  },\n  guests: originalRequest.guests,\n  roomType: originalRequest.roomType,\n  intent: originalRequest.intent,\n  voiceRequestTimestamp: originalRequest.timestamp,\n  voiceConfidence: originalRequest.confidence,\n  availability: {\n    isAvailable: availabilityData.available || false,\n    rooms: availabilityData.rooms || [],\n    totalRooms: (availabilityData.rooms || []).length,\n    alternativeDates: availabilityData.alternativeDates || []\n  },\n  rates: {\n    baseRate: rateData.baseRate || 0,\n    totalRate: rateData.totalRate || 0,\n    currency: rateData.currency || 'USD',\n    breakdown: rateData.breakdown || {},\n    validUntil: rateData.validUntil\n  },\n  analysisTimestamp: new Date().toISOString(),\n  followUpRecommendation: {\n    shouldFollowUp: !availabilityData.available || originalRequest.confidence < 0.8,\n    reason: !availabilityData.available ? 'no_availability' : \n            originalRequest.confidence < 0.8 ? 'low_confidence' : 'none',\n    suggestedAction: !availabilityData.available ? 'offer_alternatives' : 'confirm_booking'\n  }\n};\n\nreturn { json: enrichedData };"
+      },
+      "id": "enrich-voice-data",
+      "name": "Enrich Voice Data with Rates",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Store voice call analytics with rate and availability data\nINSERT INTO voice_call_analytics (\n  call_sid,\n  phone_number,\n  requested_check_in,\n  requested_check_out,\n  guests,\n  room_type,\n  original_intent,\n  voice_confidence,\n  voice_timestamp,\n  is_available,\n  available_rooms_count,\n  base_rate,\n  total_rate,\n  currency,\n  follow_up_needed,\n  follow_up_reason,\n  suggested_action,\n  rate_data,\n  availability_data,\n  created_at,\n  updated_at\n) VALUES (\n  '{{ $json.callSid }}',\n  '{{ $json.phoneNumber }}',\n  '{{ $json.requestedDates.checkIn }}',\n  '{{ $json.requestedDates.checkOut }}',\n  {{ $json.guests }},\n  '{{ $json.roomType }}',\n  '{{ $json.intent }}',\n  {{ $json.voiceConfidence }},\n  '{{ $json.voiceRequestTimestamp }}',\n  {{ $json.availability.isAvailable }},\n  {{ $json.availability.totalRooms }},\n  {{ $json.rates.baseRate }},\n  {{ $json.rates.totalRate }},\n  '{{ $json.rates.currency }}',\n  {{ $json.followUpRecommendation.shouldFollowUp }},\n  '{{ $json.followUpRecommendation.reason }}',\n  '{{ $json.followUpRecommendation.suggestedAction }}',\n  '{{ JSON.stringify($json.rates) }}',\n  '{{ JSON.stringify($json.availability) }}',\n  NOW(),\n  NOW()\n)\nON CONFLICT (call_sid) DO UPDATE SET\n  is_available = EXCLUDED.is_available,\n  available_rooms_count = EXCLUDED.available_rooms_count,\n  base_rate = EXCLUDED.base_rate,\n  total_rate = EXCLUDED.total_rate,\n  follow_up_needed = EXCLUDED.follow_up_needed,\n  follow_up_reason = EXCLUDED.follow_up_reason,\n  suggested_action = EXCLUDED.suggested_action,\n  rate_data = EXCLUDED.rate_data,\n  availability_data = EXCLUDED.availability_data,\n  updated_at = NOW();",
+        "options": {}
+      },
+      "id": "store-analytics-data",
+      "name": "Store Analytics Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1560, 300],
+      "credentials": {
+        "postgres": {
+          "id": "{{ $env.POSTGRES_CREDENTIAL_ID }}",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "needs_follow_up",
+              "leftValue": "={{ $json.followUpRecommendation.shouldFollowUp }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "check-needs-follow-up",
+      "name": "Check Needs Follow-up",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1780, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{ $env.NOTIFICATION_SERVICE_URL }}/api/v1/notifications/send",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"channel\": \"sms\",\n  \"to\": \"{{ $('Enrich Voice Data with Rates').item.json.phoneNumber }}\",\n  \"templateId\": \"availability_follow_up\",\n  \"templateData\": {\n    \"checkIn\": \"{{ $('Enrich Voice Data with Rates').item.json.requestedDates.checkIn }}\",\n    \"checkOut\": \"{{ $('Enrich Voice Data with Rates').item.json.requestedDates.checkOut }}\",\n    \"isAvailable\": {{ $('Enrich Voice Data with Rates').item.json.availability.isAvailable }},\n    \"alternativeDates\": {{ JSON.stringify($('Enrich Voice Data with Rates').item.json.availability.alternativeDates) }},\n    \"baseRate\": {{ $('Enrich Voice Data with Rates').item.json.rates.baseRate }},\n    \"bookingUrl\": \"{{ $env.BOOKING_URL }}\"\n  },\n  \"priority\": \"medium\"\n}",
+        "options": {}
+      },
+      "id": "send-follow-up-notification",
+      "name": "Send Follow-up Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{ $env.BI_SERVICE_URL }}/api/v1/analytics/voice-insights",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"eventType\": \"voice_availability_analysis\",\n  \"callSid\": \"{{ $('Enrich Voice Data with Rates').item.json.callSid }}\",\n  \"metrics\": {\n    \"requestedDates\": \"{{ $('Enrich Voice Data with Rates').item.json.requestedDates.checkIn }} - {{ $('Enrich Voice Data with Rates').item.json.requestedDates.checkOut }}\",\n    \"availability\": {{ $('Enrich Voice Data with Rates').item.json.availability.isAvailable }},\n    \"roomsAvailable\": {{ $('Enrich Voice Data with Rates').item.json.availability.totalRooms }},\n    \"rateOffered\": {{ $('Enrich Voice Data with Rates').item.json.rates.totalRate }},\n    \"voiceConfidence\": {{ $('Enrich Voice Data with Rates').item.json.voiceConfidence }},\n    \"followUpGenerated\": {{ $('Enrich Voice Data with Rates').item.json.followUpRecommendation.shouldFollowUp }}\n  },\n  \"timestamp\": \"{{ $('Enrich Voice Data with Rates').item.json.analysisTimestamp }}\"\n}",
+        "options": {}
+      },
+      "id": "send-to-bi-service",
+      "name": "Send to BI Service",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 200]
+    }
+  ],
+  "connections": {
+    "Rate Sync Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Recent Voice Calls",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Recent Voice Calls": {
+      "main": [
+        [
+          {
+            "node": "Extract Availability Requests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Availability Requests": {
+      "main": [
+        [
+          {
+            "node": "Check Has Requests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Has Requests": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Check Current Availability",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Current Rates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Current Availability": {
+      "main": [
+        [
+          {
+            "node": "Enrich Voice Data with Rates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Current Rates": {
+      "main": [
+        [
+          {
+            "node": "Enrich Voice Data with Rates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich Voice Data with Rates": {
+      "main": [
+        [
+          {
+            "node": "Store Analytics Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Analytics Data": {
+      "main": [
+        [
+          {
+            "node": "Check Needs Follow-up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Needs Follow-up": {
+      "main": [
+        [
+          {
+            "node": "Send to BI Service",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Follow-up Notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send to BI Service",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "id": "voice-analytics",
+      "name": "Voice Analytics"
+    },
+    {
+      "id": "rate-availability",
+      "name": "Rate & Availability"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2024-08-10T15:45:00.000Z",
+  "versionId": "001"
+}

@@ -1,6 +1,12 @@
 version: '3.8'
 
+networks:
+  infrastructure:
+    driver: bridge
+    name: nx-mono-infrastructure
+
 services:
+  # Application services
   app:
     build:
       context: .
@@ -13,11 +19,20 @@ services:
       - /app/node_modules
     environment:
       - NODE_ENV=development
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/nx_mono_repo
+      - REDIS_URL=redis://redis:6379
+      - JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+      - PROMETHEUS_GATEWAY_URL=http://prometheus:9090
     command: npm run start:dev
     depends_on:
       - redis
       - postgres
+      - jaeger
+      - prometheus
+    networks:
+      - infrastructure
 
+  # Database services
   postgres:
     image: postgres:15-alpine
     environment:
@@ -29,6 +44,13 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    networks:
+      - infrastructure
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
@@ -36,18 +58,157 @@ services:
       - '6379:6379'
     volumes:
       - redis_data:/data
+    networks:
+      - infrastructure
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
+  # Queue services
+  bullmq-ui:
+    image: deadly0/bull-board:latest
+    ports:
+      - '3001:3000'
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - REDIS_USE_TLS=false
+    depends_on:
+      - redis
+    networks:
+      - infrastructure
+
+  # Tracing services
+  jaeger:
+    image: jaegertracing/all-in-one:1.51
+    ports:
+      - '16686:16686' # UI
+      - '14268:14268' # Jaeger collector HTTP
+      - '14250:14250' # Jaeger collector gRPC
+      - '6831:6831/udp' # Jaeger agent compact thrift protocol
+      - '6832:6832/udp' # Jaeger agent binary thrift protocol
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - LOG_LEVEL=debug
+    networks:
+      - infrastructure
+
+  # Metrics services
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    ports:
+      - '9090:9090'
+    volumes:
+      - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infrastructure/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    networks:
+      - infrastructure
+
+  grafana:
+    image: grafana/grafana:10.2.2
+    ports:
+      - '3002:3000'
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=redis-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infrastructure/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./infrastructure/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+    networks:
+      - infrastructure
+
+  # Logging services
+  loki:
+    image: grafana/loki:2.9.2
+    ports:
+      - '3100:3100'
+    volumes:
+      - ./infrastructure/loki/loki.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - infrastructure
+
+  promtail:
+    image: grafana/promtail:2.9.2
+    volumes:
+      - ./infrastructure/promtail/promtail.yml:/etc/promtail/config.yml:ro
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    networks:
+      - infrastructure
+
+  # MCP Orchestration Hub
+  mcp-orchestration-hub:
+    image: node:18-alpine
+    working_dir: /app
+    ports:
+      - '8080:8080'
+    volumes:
+      - ./infrastructure/mcp-hub:/app
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - NODE_ENV=development
+      - POSTGRES_URL=postgresql://postgres:postgres@postgres:5432/nx_mono_repo
+      - REDIS_URL=redis://redis:6379
+      - JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+      - PROMETHEUS_GATEWAY=http://prometheus:9090
+      - LOKI_ENDPOINT=http://loki:3100
+    command: |
+      sh -c '
+        if [ ! -f package.json ]; then
+          npm init -y
+          npm install express cors helmet morgan winston pino pino-loki prometheus-api-metrics jaeger-client bull ioredis pg
+        fi
+        node server.js
+      '
+    depends_on:
+      - postgres
+      - redis
+      - jaeger
+      - prometheus
+      - loki
+    networks:
+      - infrastructure
+
+  # Reverse proxy
   nginx:
     image: nginx:alpine
     ports:
       - '80:80'
       - '443:443'
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./ssl:/etc/nginx/ssl
     depends_on:
       - app
+      - grafana
+      - jaeger
+      - bullmq-ui
+    networks:
+      - infrastructure
 
 volumes:
   postgres_data:
   redis_data:
+  prometheus_data:
+  grafana_data:
+  loki_data:

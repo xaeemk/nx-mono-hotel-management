@@ -35,3 +35,9 @@ Thumbs.db
 
 # Coverage
 coverage/
+
+# Helm templates contain Go templating syntax that Prettier cannot parse
+helm/
+
+# Kubernetes manifests with template placeholders
+k8s/

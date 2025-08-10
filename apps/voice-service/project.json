@@ -1,0 +1,67 @@
+{
+  "name": "voice-service",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/voice-service/src",
+  "projectType": "application",
+  "implicitDependencies": ["shared-database", "shared-types", "shared-utils"],
+  "targets": {
+    "build": {
+      "executor": "@nx/node:build",
+      "outputs": ["{options.outputPath}"],
+      "defaultConfiguration": "production",
+      "options": {
+        "outputPath": "dist/apps/voice-service",
+        "main": "apps/voice-service/src/main.ts",
+        "tsConfig": "apps/voice-service/tsconfig.app.json"
+      },
+      "configurations": {
+        "development": {
+          "optimization": false,
+          "extractLicenses": false,
+          "inspect": false
+        },
+        "production": {
+          "optimization": true,
+          "extractLicenses": true,
+          "inspect": false,
+          "fileReplacements": [
+            {
+              "replace": "apps/voice-service/src/environments/environment.ts",
+              "with": "apps/voice-service/src/environments/environment.prod.ts"
+            }
+          ]
+        }
+      }
+    },
+    "serve": {
+      "executor": "@nx/node:serve",
+      "defaultConfiguration": "development",
+      "options": {
+        "buildTarget": "voice-service:build"
+      },
+      "configurations": {
+        "development": {
+          "buildTarget": "voice-service:build:development"
+        },
+        "production": {
+          "buildTarget": "voice-service:build:production"
+        }
+      }
+    },
+    "test": {
+      "executor": "@nx/jest:jest",
+      "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
+      "options": {
+        "jestConfig": "apps/voice-service/jest.config.ts",
+        "passWithNoTests": true
+      },
+      "configurations": {
+        "ci": {
+          "ci": true,
+          "coverageReporters": ["text"]
+        }
+      }
+    }
+  },
+  "tags": ["type:app", "scope:voice", "platform:node"]
+}

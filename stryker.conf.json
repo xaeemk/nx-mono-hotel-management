@@ -1,0 +1,57 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "packageManager": "npm",
+  "reporters": ["html", "clear-text", "progress", "dashboard"],
+  "testRunner": "jest",
+  "coverageAnalysis": "perTest",
+  "jest": {
+    "projectType": "custom",
+    "configFile": "jest.preset.js",
+    "enableFindRelatedTests": true
+  },
+  "mutate": [
+    "apps/**/src/**/*.ts",
+    "libs/**/src/**/*.ts",
+    "!**/*.spec.ts",
+    "!**/*.test.ts",
+    "!**/*.d.ts",
+    "!**/node_modules/**",
+    "!**/coverage/**",
+    "!**/dist/**"
+  ],
+  "tempDirName": "stryker-tmp",
+  "cleanTempDir": true,
+  "thresholds": {
+    "high": 80,
+    "low": 60,
+    "break": 50
+  },
+  "dashboard": {
+    "project": "github.com/your-org/nx-mono-repo",
+    "version": "main"
+  },
+  "htmlReporter": {
+    "fileName": "mutation-report.html"
+  },
+  "timeoutMS": 60000,
+  "timeoutFactor": 1.5,
+  "maxConcurrentTestRunners": 4,
+  "disableTypeChecks": false,
+  "checkers": ["typescript"],
+  "tsconfigFile": "tsconfig.base.json",
+  "buildCommand": "nx build",
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/coverage/**",
+    "**/dist/**",
+    "**/*.config.js",
+    "**/*.config.ts",
+    "**/main.ts",
+    "**/environments/**"
+  ],
+  "mutator": {
+    "plugins": ["@stryker-mutator/typescript-checker"]
+  },
+  "incremental": true,
+  "incrementalFile": "stryker-incremental.json"
+}

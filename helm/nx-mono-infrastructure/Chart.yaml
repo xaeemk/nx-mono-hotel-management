@@ -1,0 +1,55 @@
+apiVersion: v2
+name: nx-mono-infrastructure
+description: A Helm chart for NX Mono Repo Infrastructure Services
+type: application
+version: 0.1.0
+appVersion: '1.0.0'
+
+keywords:
+  - nx
+  - monorepo
+  - infrastructure
+  - observability
+  - microservices
+
+home: https://github.com/your-org/nx-mono-repo
+sources:
+  - https://github.com/your-org/nx-mono-repo
+
+maintainers:
+  - name: Development Team
+    email: dev-team@your-org.com
+
+dependencies:
+  - name: postgresql
+    version: '12.1.9'
+    repository: 'https://charts.bitnami.com/bitnami'
+    condition: postgresql.enabled
+
+  - name: redis
+    version: '17.4.3'
+    repository: 'https://charts.bitnami.com/bitnami'
+    condition: redis.enabled
+
+  - name: prometheus
+    version: '15.18.0'
+    repository: 'https://prometheus-community.github.io/helm-charts'
+    condition: prometheus.enabled
+
+  - name: grafana
+    version: '6.50.7'
+    repository: 'https://grafana.github.io/helm-charts'
+    condition: grafana.enabled
+
+  - name: loki
+    version: '4.4.2'
+    repository: 'https://grafana.github.io/helm-charts'
+    condition: loki.enabled
+
+  - name: promtail
+    version: '6.8.3'
+    repository: 'https://grafana.github.io/helm-charts'
+    condition: promtail.enabled
+
+annotations:
+  category: Infrastructure

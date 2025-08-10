@@ -1,0 +1,50 @@
+{
+  "name": "housekeeping-mobile",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/housekeeping-mobile/src",
+  "projectType": "application",
+  "tags": [],
+  "targets": {
+    "build": {
+      "executor": "@nx/next:build",
+      "outputs": ["{options.outputPath}"],
+      "defaultConfiguration": "production",
+      "options": {
+        "root": "apps/housekeeping-mobile",
+        "outputPath": "dist/apps/housekeeping-mobile"
+      },
+      "configurations": {
+        "development": {
+          "outputPath": "apps/housekeeping-mobile"
+        },
+        "production": {}
+      }
+    },
+    "serve": {
+      "executor": "@nx/next:server",
+      "defaultConfiguration": "development",
+      "options": {
+        "buildTarget": "housekeeping-mobile:build",
+        "dev": true,
+        "port": 3003
+      },
+      "configurations": {
+        "development": {
+          "buildTarget": "housekeeping-mobile:build:development",
+          "dev": true
+        },
+        "production": {
+          "buildTarget": "housekeeping-mobile:build:production",
+          "dev": false
+        }
+      }
+    },
+    "lint": {
+      "executor": "@nx/linter:eslint",
+      "outputs": ["{options.outputFile}"],
+      "options": {
+        "lintFilePatterns": ["apps/housekeeping-mobile/**/*.{ts,tsx,js,jsx}"]
+      }
+    }
+  }
+}

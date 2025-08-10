@@ -1,0 +1,402 @@
+name: Deploy to EKS
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-west-2
+  ECR_REPOSITORY: nx-mono-repo
+  CLUSTER_NAME_STAGING: nx-mono-repo-staging
+  CLUSTER_NAME_PROD: nx-mono-repo-prod
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      should-deploy: ${{ steps.changes.outputs.should-deploy }}
+      environment: ${{ steps.environment.outputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "should-deploy=true" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]] || [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
+            echo "should-deploy=true" >> $GITHUB_OUTPUT
+          else
+            echo "should-deploy=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Determine environment
+        id: environment
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "environment=prod" >> $GITHUB_OUTPUT
+          else
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          fi
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linter
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Run tests
+        run: npm test -- --passWithNoTests --coverage
+
+      - name: Build projects
+        run: npm run build
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v3
+        if: matrix.node-version == '18.x'
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          directory: ./coverage
+          flags: unittests
+          name: codecov-umbrella
+
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'repo'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  build-and-push:
+    runs-on: ubuntu-latest
+    needs: [changes, test]
+    if: needs.changes.outputs.should-deploy == 'true'
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: GitHubActions-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-${{ needs.changes.outputs.environment }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+            NODE_ENV=production
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.meta.outputs.tags }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v3
+        with:
+          name: sbom-${{ needs.changes.outputs.environment }}
+          path: sbom.spdx.json
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [changes, build-and-push]
+    if: needs.changes.outputs.should-deploy == 'true'
+    environment:
+      name: ${{ needs.changes.outputs.environment }}
+      url: ${{ steps.deployment.outputs.url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: GitHubActions-Deploy-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.29.0'
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.13.0'
+
+      - name: Update kubeconfig
+        run: |
+          if [[ "${{ needs.changes.outputs.environment }}" == "prod" ]]; then
+            aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.CLUSTER_NAME_PROD }}
+          else
+            aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.CLUSTER_NAME_STAGING }}
+          fi
+
+      - name: Install/Update AWS Load Balancer Controller
+        run: |
+          # Add EKS chart repository
+          helm repo add eks https://aws.github.io/eks-charts
+          helm repo update
+
+          # Install AWS Load Balancer Controller
+          helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
+            -n kube-system \
+            --set clusterName=${{ needs.changes.outputs.environment == 'prod' && env.CLUSTER_NAME_PROD || env.CLUSTER_NAME_STAGING }} \
+            --set serviceAccount.create=false \
+            --set serviceAccount.name=aws-load-balancer-controller \
+            --wait
+
+      - name: Install/Update Cluster Autoscaler
+        run: |
+          # Replace placeholders in cluster autoscaler manifest
+          envsubst < k8s/base/cluster-autoscaler/autoscaler.yaml > /tmp/cluster-autoscaler.yaml
+          kubectl apply -f /tmp/cluster-autoscaler.yaml
+        env:
+          CLUSTER_NAME: ${{ needs.changes.outputs.environment == 'prod' && env.CLUSTER_NAME_PROD || env.CLUSTER_NAME_STAGING }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+          CLUSTER_AUTOSCALER_ROLE_ARN: ${{ secrets.CLUSTER_AUTOSCALER_ROLE_ARN }}
+
+      - name: Create/Update Secrets
+        run: |
+          # Database secret
+          kubectl create secret generic database-secret \
+            --from-literal=url="${{ secrets.DATABASE_URL }}" \
+            --from-literal=host="${{ secrets.DATABASE_HOST }}" \
+            --from-literal=username="${{ secrets.DATABASE_USERNAME }}" \
+            --from-literal=password="${{ secrets.DATABASE_PASSWORD }}" \
+            --from-literal=database="${{ secrets.DATABASE_NAME }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          # Redis secret
+          kubectl create secret generic redis-secret \
+            --from-literal=url="${{ secrets.REDIS_URL }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          # App secrets
+          kubectl create secret generic app-secrets \
+            --from-literal=jwt-secret="${{ secrets.JWT_SECRET }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy Infrastructure
+        run: |
+          # Add required Helm repositories
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo update
+
+          # Update dependencies
+          helm dependency update helm/nx-mono-infrastructure/
+
+          # Install/upgrade infrastructure
+          helm upgrade --install nx-infra helm/nx-mono-infrastructure/ \
+            --namespace infrastructure \
+            --create-namespace \
+            --values helm/nx-mono-infrastructure/values.yaml \
+            --set global.environment=${{ needs.changes.outputs.environment }} \
+            --wait --timeout=10m
+
+      - name: Deploy Application
+        id: deployment
+        run: |
+          # Set image tag
+          IMAGE_TAG=$(echo "${{ needs.build-and-push.outputs.image-tag }}" | head -1)
+          ECR_REGISTRY="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+
+          # Replace placeholders in manifests
+          export ECR_REGISTRY IMAGE_TAG
+          export ENVIRONMENT=${{ needs.changes.outputs.environment }}
+          export CERTIFICATE_ARN=${{ secrets.CERTIFICATE_ARN }}
+          export BACKUP_BUCKET=${{ secrets.BACKUP_BUCKET }}
+          export AWS_REGION=${{ env.AWS_REGION }}
+          export BACKUP_ROLE_ARN=${{ secrets.BACKUP_ROLE_ARN }}
+
+          # Process and apply manifests
+          find k8s/base -name "*.yaml" -type f | while read -r file; do
+            envsubst < "$file" | kubectl apply -f -
+          done
+
+          # Wait for deployment to be ready
+          kubectl rollout status deployment/api-gateway --timeout=600s
+
+          # Get the load balancer URL
+          LB_URL=$(kubectl get ingress nx-mono-repo-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          if [[ "${{ needs.changes.outputs.environment }}" == "prod" ]]; then
+            echo "url=https://api.nx-mono-repo.com" >> $GITHUB_OUTPUT
+          else
+            echo "url=https://api-staging.nx-mono-repo.com" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Deploy Backup CronJob
+        run: |
+          # Replace placeholders and deploy backup job
+          export BACKUP_ROLE_ARN=${{ secrets.BACKUP_ROLE_ARN }}
+          export BACKUP_BUCKET=${{ secrets.BACKUP_BUCKET }}
+          export AWS_REGION=${{ env.AWS_REGION }}
+
+          envsubst < k8s/base/backup/postgres-backup.yaml | kubectl apply -f -
+
+      - name: Run Health Checks
+        run: |
+          echo "Waiting for application to be healthy..."
+          sleep 30
+
+          # Check deployment status
+          kubectl get deployments
+          kubectl get pods -l app=api-gateway
+
+          # Check if ingress is ready
+          kubectl get ingress nx-mono-repo-ingress
+
+          echo "Deployment completed successfully!"
+
+      - name: Notify Deployment
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: |
+            Deployment to ${{ needs.changes.outputs.environment }} environment
+            Result: ${{ job.status }}
+            Commit: ${{ github.sha }}
+            URL: ${{ steps.deployment.outputs.url }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  post-deploy-tests:
+    runs-on: ubuntu-latest
+    needs: [changes, deploy]
+    if: needs.changes.outputs.should-deploy == 'true'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run API tests against deployed environment
+        run: npm run test:api
+        env:
+          API_BASE_URL: ${{ needs.deploy.outputs.url }}
+          ENVIRONMENT: ${{ needs.changes.outputs.environment }}
+
+      - name: Run load tests
+        if: needs.changes.outputs.environment == 'staging'
+        run: |
+          npm install -g k6
+          k6 run tests/load/api-gateway-auth.js \
+            -e API_BASE_URL=${{ needs.deploy.outputs.url }} \
+            --duration=2m \
+            --vus=10
+
+  cleanup:
+    runs-on: ubuntu-latest
+    needs: [changes, post-deploy-tests]
+    if: always() && needs.changes.outputs.environment == 'staging'
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: GitHubActions-Cleanup-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Cleanup old ECR images
+        run: |
+          aws ecr describe-images \
+            --repository-name ${{ env.ECR_REPOSITORY }}-${{ needs.changes.outputs.environment }} \
+            --query 'sort_by(imageDetails,& imageLastPushedAt)[:-10].[imageDigest]' \
+            --output text | \
+          xargs -I {} aws ecr batch-delete-image \
+            --repository-name ${{ env.ECR_REPOSITORY }}-${{ needs.changes.outputs.environment }} \
+            --image-ids imageDigest={}

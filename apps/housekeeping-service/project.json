@@ -1,0 +1,52 @@
+{
+  "name": "housekeeping-service",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/housekeeping-service/src",
+  "projectType": "application",
+  "targets": {
+    "build": {
+      "executor": "@nx/node:build",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/apps/housekeeping-service",
+        "main": "apps/housekeeping-service/src/main.ts",
+        "tsConfig": "apps/housekeeping-service/tsconfig.app.json",
+        "assets": ["apps/housekeeping-service/src/assets"]
+      },
+      "configurations": {
+        "production": {
+          "optimization": true,
+          "extractLicenses": true,
+          "inspect": false,
+          "fileReplacements": [
+            {
+              "replace": "apps/housekeeping-service/src/environments/environment.ts",
+              "with": "apps/housekeeping-service/src/environments/environment.prod.ts"
+            }
+          ]
+        }
+      }
+    },
+    "serve": {
+      "executor": "@nx/node:execute",
+      "options": {
+        "buildTarget": "housekeeping-service:build"
+      }
+    },
+    "lint": {
+      "executor": "@nx/linter:eslint",
+      "options": {
+        "lintFilePatterns": ["apps/housekeeping-service/**/*.ts"]
+      }
+    },
+    "test": {
+      "executor": "@nx/jest:jest",
+      "outputs": ["{workspaceRoot}/coverage/apps/housekeeping-service"],
+      "options": {
+        "jestConfig": "apps/housekeeping-service/jest.config.ts",
+        "passWithNoTests": true
+      }
+    }
+  },
+  "tags": ["scope:housekeeping", "type:app"]
+}
